@@ -1,0 +1,38 @@
+# dormer — every setting, with its default. Copy what you need to
+# ~/.config/dormer/config.toml; an absent file means all of these.
+# `dormer doctor` shows what is in effect.
+
+[place]
+# Where the sky is. Left out, dormer uses the Noctalia shell's location if it
+# is running, and otherwise Greenwich.
+# latitude = 35.78
+# longitude = -5.79
+# name = "Tangier"
+
+[look]
+view = "rooftops"        # rooftops | city | coast; `dormer view NAME` overrides this
+seed = 12                # a different number is a different old town (rooftops only)
+size = "auto"            # or "2560x1600"; auto is your largest screen
+mode = "auto"            # dark | light | auto (follow the desktop)
+top_dark = "#1A2027"     # the sky fades into this at the top: use your bar's colour
+top_light = "#ECEFEE"
+
+[wallpaper]
+backend = "auto"         # noctalia | swww | hyprpaper | command | auto
+command = ""             # for "command", e.g. "swaybg -m fill -i {path}"
+
+[weather]
+source = "auto"          # noctalia | open-meteo | none | auto
+
+[house]
+lamp = ["claude", "codex"]   # the lamp is lit while a process with one of these names runs
+containers = true            # one blue window for each running Docker container
+
+[live]
+fps = 30
+
+[power]
+hold_file = ""           # while this file exists the wallpaper holds still (e.g. a battery-saver flag)
+
+[dev]
+terminal = ""            # ghostty | kitty | foot | alacritty | wezterm; empty is $TERMINAL or the first found

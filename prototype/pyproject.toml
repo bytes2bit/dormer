@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dormer"
+version = "0.1.0"
+description = "A window in the roof: a wallpaper of rooftops under the real sky, weather and week"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["pillow>=10"]
+
+[project.optional-dependencies]
+live = ["PyGObject>=3.48", "pycairo>=1.25"]    # plus GTK 4 and gtk4-layer-shell from your distribution
+
+[project.scripts]
+dormer = "dormer.cli:main"
+
+[tool.setuptools]
+packages = ["dormer"]
