@@ -695,9 +695,13 @@ impl Stage for Dale {
     fn targets(&self, sc: &Scene, a: &Anchors) -> Vec<crate::interaction::Target> {
         use crate::interaction::{common_targets, Action, Target};
         let mut out = common_targets(sc, &self.lay, a);
-        out.push(Target::new(100, [570.0, SHORE + 5.0, 1230.0, 766.0], (930.0, 741.0), Action::Ripple, mix(sc.sky[4], BLUE, 0.25), Some(CRAGS)));
+        out.push(Target::new(100, [570.0, SHORE + 5.0, 1230.0, 766.0], (930.0, 741.0), if sc.temp < -3.0 { Action::Light } else { Action::Ripple }, mix(sc.sky[4], BLUE, 0.25), Some(CRAGS)));
         out.push(Target::new(101, [1300.0, 565.0, 1570.0, 880.0], (1430.0, 735.0), Action::Sparks, AMBER, None));
-        out.push(Target::near(102, (1220.0, 856.0), 65.0, Action::Sparks, BLUE, None));
+        for (n, (x, tall, wide, lean)) in STONES.iter().copied().enumerate() {
+            let foot = height_at(&self.bank, x) + 5.0;
+            let rune = (x + lean * 0.48 * 3.0, foot - tall * 0.48);
+            out.push(Target::new(110 + n, [x - wide * 0.8, foot - tall, x + wide * 0.8, foot], rune, Action::Sparks, BLUE, None));
+        }
         out
     }
 

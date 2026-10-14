@@ -176,9 +176,18 @@ impl Interaction {
             let a = self.strength;
             if t.action == Action::Cat {
                 cat_ears(d, lay, t.at, t.col, a, 0.0);
+            } else if t.action == Action::Birds {
+                for n in 0..3 {
+                    props::bird(d, lay.dx(t.at.0 + (n as f32 - 1.0) * 10.0), lay.dy(t.at.1 - 7.0 - a * 2.0), lay.d(5.0), 0.15 + a * 0.35, t.col, a * 0.9);
+                }
+            } else if t.action == Action::Leaves {
+                if let Some(p) = self.pointer {
+                    d.ellipse(lay.dx(p.0), lay.dy(p.1 - a * 2.0), lay.d(4.0), lay.d(1.4), t.col, a * 0.5);
+                }
             } else if t.action != Action::Birds && t.action != Action::Leaves {
                 let radius = if t.action == Action::Ripple { 18.0 } else { 22.0 };
-                d.glow(lay.dx(t.at.0), lay.dy(t.at.1), lay.d(radius), lay.d(radius * 0.65), t.col, a * (0.04 + 0.10 * sc.dark), 2, Blend::Screen);
+                let at = if matches!(t.action, Action::Ripple | Action::Sparks | Action::Dust) { self.pointer.unwrap_or(t.at) } else { t.at };
+                d.glow(lay.dx(at.0), lay.dy(at.1), lay.d(radius), lay.d(radius * 0.65), t.col, a * (0.04 + 0.10 * sc.dark), 2, Blend::Screen);
             }
         }
         for r in self.reactions.iter().flatten() {
@@ -396,5 +405,29 @@ pub(crate) mod tests {
         let cache = crate::paint::Cache::new(moon, 12, 640, 400);
         let sc = scene(moon, true);
         assert!(!cache.stage.targets(&sc, &crate::views::Anchors::default()).iter().any(|t| matches!(t.action, Action::Birds | Action::Leaves)));
+    }
+
+    #[test]
+    fn perch_hover_draws_attention_and_runes_follow_stone_geometry() {
+        let view = crate::views::find("rooftops").unwrap();
+        let sc = scene(view, false);
+        let lay = Layout::new(640, 400, view.horizon());
+        let t = Target::near(1, (800.0, 700.0), 32.0, Action::Birds, [40.0; 3], None);
+        let mut i = Interaction::new();
+        i.motion(Some(t.at));
+        for _ in 0..30 { i.step(0.05, &[t]); }
+        let mut px = vec![0xFF80_8080; 640 * 400];
+        let mut dirty = Vec::new();
+        let mut shaper = crate::gfx::Shaper::new();
+        let mut f = Frame { w: 640, h: 400, px: &mut px, dirty: &mut dirty, depth: None, behind: None, full_damage: false };
+        i.draw(&mut Draw::new(&mut f, &mut shaper), &sc, &lay);
+        assert!(px.iter().any(|p| *p != 0xFF80_8080), "perch hover must be visible");
+        let vale = crate::views::find("vale").unwrap();
+        let cache = crate::paint::Cache::new(vale, 12, 640, 400);
+        let mut sc = scene(vale, false);
+        sc.temp = -5.0;
+        let ts = cache.stage.targets(&sc, &crate::views::Anchors::default());
+        assert_eq!(ts.iter().filter(|t| t.action == Action::Sparks && t.at.0 < 500.0).count(), 8);
+        assert!(!ts.iter().any(|t| t.action == Action::Ripple));
     }
 }

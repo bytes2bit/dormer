@@ -6,6 +6,14 @@ pub fn should_paint_base(open: bool, dark: bool, probe: bool, has_base: bool) ->
     !has_base || probe || (open && !dark)
 }
 
+pub fn replace_base(stale: bool, instant: bool, bent: bool, moved: bool, same_size: bool) -> bool {
+    stale || !same_size || ((instant || bent) && !moved)
+}
+
+pub fn rebase_on_wake(woke: bool, visible_stale: bool, scene_age: f64) -> bool {
+    woke && (visible_stale || scene_age > 2.0)
+}
+
 /// Returns the number of pixels copied, useful for checking redundant work.
 pub fn restore_pixels(dst: &mut [u32], base: &[u32], w: usize, stale: Option<(usize, usize)>, dirty: &[Rect]) -> usize {
     if w == 0 { return 0; }
@@ -68,5 +76,13 @@ mod tests {
         assert!(should_paint_base(false, false, false, false));
         assert!(should_paint_base(true, false, false, true));
         assert!(should_paint_base(false, true, true, true));
+    }
+
+    #[test]
+    fn visible_view_changes_fade_and_stale_outputs_resume_immediately() {
+        assert!(!replace_base(false, true, false, true, true));
+        assert!(replace_base(true, false, false, true, true));
+        assert!(rebase_on_wake(true, true, 0.1));
+        assert!(!rebase_on_wake(false, true, 20.0));
     }
 }

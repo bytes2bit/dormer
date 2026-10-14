@@ -334,7 +334,7 @@ impl App {
             for s in self.screens.iter_mut() {
                 s.interaction.reset();
                 s.targets.clear();
-                s.base_stale = true;
+                s.base_stale |= !self.probe && (!s.open || s.dark);
             }
             self.world.leave();
         }
@@ -359,7 +359,7 @@ impl App {
             s.anchors = anchors;
             s.targets = cache.stage.targets(&sc, &s.anchors);
             let stale = std::mem::replace(&mut s.base_stale, false);
-            if stale || ((instant || self.bent) && !moved) || s.shown.len() != px.len() {
+            if crate::buffer::replace_base(stale, instant, self.bent, moved, s.shown.len() == px.len()) {
                 s.shown = px;
                 s.from = Vec::new();
                 s.to = Vec::new();
@@ -921,7 +921,7 @@ pub fn run() -> i32 {
         for s in app.screens.iter_mut() {
             s.dark = s.waiting && mono - s.sent > 1.0;
         }
-        if std::mem::take(&mut app.woke) && mono - app.scene_at.1 > 2.0 {
+        if crate::buffer::rebase_on_wake(std::mem::take(&mut app.woke), app.screens.iter().any(|s| app.seen(s) && s.base_stale), mono - app.scene_at.1) {
             app.rebase(true); // awake again: show this minute, not the one it went dark in
         }
         if mono >= saver_due {
