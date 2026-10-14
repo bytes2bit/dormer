@@ -10,7 +10,7 @@
 # name = "Tangier"
 
 [look]
-view = "rooftops"        # rooftops | city | coast; `dormer view NAME` overrides this
+view = "rooftops"        # rooftops | city | coast | moon | vale; `dormer view NAME` overrides this
 seed = 12                # a different number is a different old town (rooftops only)
 size = "auto"            # or "2560x1600"; auto is your largest screen
 mode = "auto"            # dark | light | auto (follow the desktop)

@@ -19,6 +19,7 @@ use crate::paint::{band, Light};
 use crate::props::{self, Layout};
 use crate::rng::hash2;
 use crate::scene::Scene;
+use crate::views::kit::{curve, grass, height_at, to_px};
 use crate::views::{lamp_colours, yours, Anchors, Blink, Breath, Knob, Lights, Smoke, Stage, View, Yours};
 
 pub struct Coast;
@@ -85,38 +86,6 @@ const BOATS: [(f32, f32, bool); 8] =
 /// Rocks off the point: x, width, how high they stand at mean tide, y of the water there.
 const SKERRIES: [(f32, f32, f32, f32); 5] = [(690.0, 44.0, 9.0, 712.0), (742.0, 30.0, 6.0, 716.0), (668.0, 26.0, 4.0, 726.0), (790.0, 22.0, 3.5, 709.0), (612.0, 34.0, 7.0, 742.0)];
 const FIRE: P = (1392.0, 913.0);
-
-/// A smooth line through hand-placed points.
-fn curve(pts: &[P], steps: usize) -> Vec<P> {
-    let n = pts.len();
-    let mut out = Vec::with_capacity((n - 1) * steps + 1);
-    for i in 0..n - 1 {
-        let (p0, p1, p2, p3) = (pts[i.saturating_sub(1)], pts[i], pts[i + 1], pts[(i + 2).min(n - 1)]);
-        for k in 0..steps {
-            let t = k as f32 / steps as f32;
-            let (t2, t3) = (t * t, t * t * t);
-            let f = |a: f32, b: f32, c: f32, d: f32| 0.5 * (2.0 * b + (c - a) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (3.0 * b - a - 3.0 * c + d) * t3);
-            out.push((f(p0.0, p1.0, p2.0, p3.0), f(p0.1, p1.1, p2.1, p3.1)));
-        }
-    }
-    out.push(pts[n - 1]);
-    out
-}
-
-/// The height of a line of points at `x`.
-fn height_at(line: &[P], x: f32) -> f32 {
-    for w in line.windows(2) {
-        if x <= w[1].0 {
-            let f = ((x - w[0].0) / (w[1].0 - w[0].0).max(1e-3)).clamp(0.0, 1.0);
-            return w[0].1 + (w[1].1 - w[0].1) * f;
-        }
-    }
-    line[line.len() - 1].1
-}
-
-fn to_px(lay: &Layout, pts: &[P]) -> Vec<P> {
-    pts.iter().map(|p| (lay.dx(p.0), lay.dy(p.1))).collect()
-}
 
 /// The headland, and everything on it and moored under it, is drawn this far to the right of
 /// where its numbers say: the light then stands a third of the way across the picture.
@@ -442,25 +411,6 @@ fn beam<S: Surface>(d: &mut Draw<S>, sc: &Scene, lay: &Layout, turn: f32) {
     d.glow(x, y, lay.d(10.0), lay.d(10.0), WHITE, (0.6 + 0.4 * flash) * night, 2, Blend::Screen);
 }
 
-/// Grass along the top of a bank, leaning with the wind: `n` blades between `x0` and `x1`.
-fn grass<S: Surface>(d: &mut Draw<S>, sc: &Scene, lay: &Layout, bank: &[P], (x0, x1, n): (f32, f32, u32), t: f32) {
-    let u = lay.u;
-    let col = sc.layers[4];
-    let lean = sc.wind_x.clamp(-1.4, 1.4);
-    let gust = (0.25 + lean.abs()).min(1.0);
-    let salt = x0 as u32;
-    for i in 0..n {
-        let x = x0 + (x1 - x0) * hash2(i, salt + 101);
-        let foot = height_at(bank, x) + 2.0;
-        let tall = 9.0 + 19.0 * hash2(i, salt + 103).powf(1.6);
-        let own = (hash2(i, salt + 107) - 0.5) * 0.5;
-        let sway = (t * (1.3 + hash2(i, salt + 109)) + x * 0.045).sin() * 0.10 * gust;
-        let bend = lean * 0.34 + own + sway;
-        let (px, py, h) = (lay.dx(x), lay.dy(foot), lay.d(tall));
-        d.path(&[(px, py), (px + bend * h * 0.35, py - h * 0.58), (px + bend * h, py - h)], (1.25 * u).max(0.9), col, 1.0);
-    }
-}
-
 const DUNE_GRASS: (f32, f32, u32) = (846.0, 1606.0, 110);
 const BLUFF_GRASS: (f32, f32, u32) = (-10.0, 440.0, 64);
 
@@ -608,8 +558,8 @@ impl Stage for Shore {
         d.s.stamp(&self.masks[4].1, self.masks[4].0 as i32, 0, |_| (dune, 1.0));
         bloom.hide(&self.masks[4].1, w, self.masks[4].0);
         if !sc.live {
-            grass(d, sc, lay, &self.dune, DUNE_GRASS, (sc.ts / 60.0) as f32);
-            grass(d, sc, lay, &self.bluff, BLUFF_GRASS, (sc.ts / 60.0) as f32);
+            grass(d, sc, lay, &self.dune, DUNE_GRASS, (sc.ts / 60.0) as f32, sc.layers[4]);
+            grass(d, sc, lay, &self.bluff, BLUFF_GRASS, (sc.ts / 60.0) as f32, sc.layers[4]);
             if sc.kite {
                 props::kite(d, sc, lay.dx(1290.0), lay.dy(924.0), u, (sc.ts / 420.0) as f32, (sc.ts / 700.0) as f32, (sc.ts / 300.0) as f32);
             }
@@ -665,8 +615,8 @@ impl Stage for Shore {
         if sc.sleepers > 0 {
             props::sleep_z(d, sc, land.dx(206.0), lay.dy(458.0), u * 0.9, t * 0.8);
         }
-        grass(d, sc, lay, &self.dune, DUNE_GRASS, t);
-        grass(d, sc, lay, &self.bluff, BLUFF_GRASS, t);
+        grass(d, sc, lay, &self.dune, DUNE_GRASS, t, sc.layers[4]);
+        grass(d, sc, lay, &self.bluff, BLUFF_GRASS, t, sc.layers[4]);
         if sc.kite {
             props::kite(d, sc, lay.dx(1290.0), lay.dy(924.0), u, t * 0.35, t * 0.23, t * 3.0);
         }

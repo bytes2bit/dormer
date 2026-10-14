@@ -37,7 +37,7 @@ const USAGE: &str = "dormer — a window in the roof: the same rooftops under th
     dormer tour                 play the whole of today in about a minute
     dormer pretend snow         borrow some weather for ten minutes
     dormer live                 run the living wallpaper (birds, rain, shooting stars)
-    dormer view city            look out somewhere else: rooftops | city | coast
+    dormer view moon            look out somewhere else: rooftops | city | coast | moon | vale
     dormer dev                  open the slider panel and bend the scene by hand
     dormer install              start on login, keep the still wallpaper up to date
     dormer doctor               show what dormer found on this machine
@@ -47,7 +47,7 @@ Moments (draw, explain, sheet):
     --weather KIND              clear fair partly overcast fog drizzle rain heavy snow storm
     --temp C  --wind KMH        override the reading
     --mode dark|light           --size 2560x1600      --seed N (a different old town)
-    --view rooftops|city|coast  draw another view without changing yours
+    --view NAME                 draw another view without changing yours (`dormer view` lists them)
     --agents N  --containers N  pretend this much is running
 
 More:
@@ -288,6 +288,7 @@ pub fn build(m: &Moment, drift: Option<f32>) -> Scene {
         rates: m.rates,
         horizon: m.view.horizon(),
         knobs: &m.knobs,
+        void: m.view.sky() == views::Sky::Void,
     })
 }
 
@@ -858,6 +859,11 @@ fn main() {
         "bench" => cmd_bench(&args),
         "soak" => cmd_soak(&args),
         "view" => cmd_view(&args),
+        "globe" => {
+            // the earth's coastlines, flattened out, for looking them over
+            let (w, h, px) = views::globe::chart();
+            gfx::save_png(args.get("out").unwrap_or("globe.png"), w, h, &px).map(|_| 0)
+        }
         "town" => {
             print!("{}", town::Town::build(seed_of(&args).unwrap_or(12)).fingerprint());
             Ok(0)

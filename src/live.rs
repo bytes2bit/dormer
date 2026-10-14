@@ -274,7 +274,7 @@ impl World {
             self.due_plane = self.due_plane.min(soon);
         }
         self.tv.resize(tvs, (0.0, 0.0));
-        let want = if sc.rain > 0.0 { ((50.0 + 230.0 * sc.rain) * 6.5) as usize } else { 0 };
+        let want = if sc.rain > 0.0 && !sc.void { ((50.0 + 230.0 * sc.rain) * 6.5) as usize } else { 0 };
         if self.drops.len() != want {
             let r = &mut self.r;
             self.drops = (0..want)
@@ -290,7 +290,7 @@ impl World {
                 })
                 .collect();
         }
-        let want = if sc.snow > 0.0 { ((30.0 + 90.0 * sc.snow) * 15.0) as usize } else { 0 };
+        let want = if sc.snow > 0.0 && !sc.void { ((30.0 + 90.0 * sc.snow) * 15.0) as usize } else { 0 };
         if self.flakes.len() != want {
             let r = &mut self.r;
             self.flakes = (0..want)
@@ -333,8 +333,18 @@ impl World {
         self.t += dt as f64;
         let t = self.t;
         let rates = sc.rates;
+        // where there is no air, nothing flies, falls or blows
+        let air = !sc.void;
+        if !air {
+            self.flocks.clear();
+            self.meteors.clear();
+            self.planes.clear();
+            self.leaves.clear();
+            self.bursts.clear();
+            self.satellites.clear();
+        }
 
-        if sc.eph.sun.el > -3.0 && !sc.storm && sc.snow < 0.6 && sc.fog < 0.6 && rates.birds > 0.0 {
+        if air && sc.eph.sun.el > -3.0 && !sc.storm && sc.snow < 0.6 && sc.fog < 0.6 && rates.birds > 0.0 {
             if t >= self.due_flock && self.flocks.len() < 3 + rates.birds as usize {
                 let wait = self.r.range(5.0, 17.0) * if sc.eph.sun.el > 20.0 { 1.6 } else { 1.0 } * if sc.rain > 0.3 { 3.0 } else { 1.0 };
                 self.due_flock = t + (wait / rates.birds) as f64;
@@ -347,7 +357,7 @@ impl World {
             self.last_hour = hour;
         } else if hour != self.last_hour {
             self.last_hour = hour;
-            if let (Some(b), true) = (src.perch, sc.eph.sun.el > -4.0 && !sc.storm && sc.rain < 0.5) {
+            if let (Some(b), true) = (src.perch, air && sc.eph.sun.el > -4.0 && !sc.storm && sc.rain < 0.5) {
                 self.scatter(b);
             }
         }
@@ -367,7 +377,7 @@ impl World {
         self.flocks.retain(|f| if f.scatter { f.age < 14.0 } else { -260.0 < f.x && f.x < VW + 260.0 });
 
         let shower = sc.shower.map_or(1.0, |s| s.1);
-        if sc.night > 0.4 && sc.cover < 0.7 && rates.meteors > 0.0 && t >= self.due_meteor {
+        if air && sc.night > 0.4 && sc.cover < 0.7 && rates.meteors > 0.0 && t >= self.due_meteor {
             let r = &mut self.r;
             let big = if r.chance(0.18) { 1.5 } else { 1.0 };
             let (ang, way) = (r.range(16.0, 42.0).to_radians(), if r.chance(0.5) { -1.0 } else { 1.0 });
@@ -389,7 +399,7 @@ impl World {
         }
         self.meteors.retain(|m| m.age < m.dur);
 
-        if sc.cover < 0.8 && sc.fog < 0.5 && rates.planes > 0.0 && t >= self.due_plane && self.planes.len() < 2 + rates.planes as usize {
+        if air && sc.cover < 0.8 && sc.fog < 0.5 && rates.planes > 0.0 && t >= self.due_plane && self.planes.len() < 2 + rates.planes as usize {
             let r = &mut self.r;
             let way = if r.chance(0.5) { -1.0 } else { 1.0 };
             self.planes.push(Plane { way, x: if way > 0.0 { -40.0 } else { VW + 40.0 }, y: r.range(80.0, 330.0), slope: r.range(-0.05, 0.05), speed: r.range(15.0, 23.0) });
@@ -455,7 +465,7 @@ impl World {
         self.puffs.retain(|p| p.age < p.life);
 
         // leaves in autumn, petals in spring
-        if src.leaves && (sc.season == 1 || sc.season == 3) && sc.wind >= 5.0 && sc.rain < 0.5 && sc.snow == 0.0 && t >= self.due_gust {
+        if air && src.leaves && (sc.season == 1 || sc.season == 3) && sc.wind >= 5.0 && sc.rain < 0.5 && sc.snow == 0.0 && t >= self.due_gust {
             let side = if sc.wind_x >= 0.0 { 1.0 } else { -1.0 };
             for k in 0..2 + r.below(6) {
                 self.leaves.push(Leaf {
@@ -495,7 +505,7 @@ impl World {
         }
         self.notes.retain(|n| n.age < n.life);
 
-        if sc.storm {
+        if sc.storm && air {
             match self.flash.as_mut() {
                 Some(f) => {
                     f.age += dt;
@@ -520,7 +530,7 @@ impl World {
         }
 
         // fireworks at the turn of the year
-        if sc.fireworks && t >= self.due_burst {
+        if air && sc.fireworks && t >= self.due_burst {
             let col = r.pick(&[AMBER, crate::color::ROSE, crate::color::BLUE, crate::color::SAGE, WARM[0], crate::color::CREAM]);
             self.bursts.push(Burst {
                 x: r.range(260.0, 1340.0),
@@ -539,7 +549,7 @@ impl World {
 
         // in the hour or two after dusk and before dawn, satellites are still in sunlight
         let el = sc.eph.sun.el as f32;
-        if (-24.0..-7.0).contains(&el) && sc.cover < 0.6 && t >= self.due_satellite {
+        if air && (-24.0..-7.0).contains(&el) && sc.cover < 0.6 && t >= self.due_satellite {
             let way = if r.chance(0.5) { -1.0 } else { 1.0 };
             let life = r.range(34.0, 60.0);
             self.satellites.push(Satellite {

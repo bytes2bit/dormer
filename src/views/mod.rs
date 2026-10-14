@@ -12,19 +12,36 @@
 //! so a new view gets smoke, flicker and twinkle by pointing at where they
 //! go.
 //!
+//! A view need not stand under our own sky. One that says its sky is a
+//! `Sky::Void` gets nothing painted overhead and nothing falling through it;
+//! it paints its own heavens, and the weather reaches it only as news.
+//!
 //! To add a view: write a module with a `View` and its `Stage`, and add it
 //! to `ALL`. Everything else (the dev panel, `--view`, `dormer view`) finds
 //! it there.
 
 pub mod coast;
 pub mod downtown;
+pub mod globe;
 pub mod kit;
+pub mod moonbase;
 pub mod rooftops;
+pub mod vale;
 
 use crate::color::Rgb;
 use crate::gfx::{Bloom, Canvas, Depth, Draw, Frame};
 use crate::props::Layout;
 use crate::scene::Scene;
+use crate::sky::Star;
+
+/// What is over a view.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Sky {
+    /// The sky over where you are: daylight, clouds, wind and weather, birds and planes.
+    Home,
+    /// No air at all. The stage paints everything overhead itself, and nothing falls, flies or blows.
+    Void,
+}
 
 /// A point of light the live layer makes twinkle.
 pub struct Spark {
@@ -125,6 +142,11 @@ pub trait Stage {
 
     fn lights(&self, sc: &Scene) -> Lights;
 
+    /// Paint what this view adds overhead. Under our own sky that is anything of its own that
+    /// belongs behind the clouds, after the sun, moon and stars are in. In a void it is the whole
+    /// sky: nothing has been painted yet.
+    fn heavens(&self, _d: &mut Draw<Canvas>, _sc: &Scene, _stars: &[Star], _out: &mut Anchors) {}
+
     /// Paint everything that stands in front of the sky, far to near. When `sc.live` is set the
     /// things that move are left out: `alive` draws them.
     fn ground(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors);
@@ -151,6 +173,10 @@ pub trait View: Sync {
         crate::sky::HORIZON
     }
 
+    fn sky(&self) -> Sky {
+        Sky::Home
+    }
+
     fn knobs(&self) -> &'static [Knob] {
         &[]
     }
@@ -166,7 +192,7 @@ pub trait View: Sync {
     fn words(&self, sc: &Scene) -> Vec<(&'static str, String)>;
 }
 
-pub static ALL: [&dyn View; 3] = [&rooftops::Rooftops, &downtown::Downtown, &coast::Coast];
+pub static ALL: [&dyn View; 5] = [&rooftops::Rooftops, &downtown::Downtown, &coast::Coast, &moonbase::Moonbase, &vale::Vale];
 
 pub fn find(id: &str) -> Option<&'static dyn View> {
     ALL.iter().copied().find(|v| v.id() == id)

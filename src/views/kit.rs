@@ -7,7 +7,7 @@
 //! household or an office behind it that keeps hours of its own.
 
 use crate::color::{mix, shade, smooth, Rgb, WARM};
-use crate::gfx::{Bloom, Canvas, Draw, Shaper, P};
+use crate::gfx::{Bloom, Canvas, Draw, Shaper, Surface, P};
 use crate::paint::Light;
 use crate::props::Layout;
 use crate::rng::hash2;
@@ -16,8 +16,19 @@ use crate::town::window_state;
 use crate::views::Lights;
 
 /// The colours walls and roofs are washed in by day. At night they all sink back into the dark.
-pub const WALLS: [Rgb; 6] = [[230.0, 223.0, 207.0], [222.0, 184.0, 166.0], [176.0, 198.0, 178.0], [226.0, 200.0, 152.0], [172.0, 192.0, 212.0], [236.0, 214.0, 196.0]];
-pub const TILES: [Rgb; 3] = [[176.0, 106.0, 84.0], [122.0, 118.0, 138.0], [150.0, 96.0, 86.0]];
+pub const WALLS: [Rgb; 6] = [
+    [230.0, 223.0, 207.0],
+    [222.0, 184.0, 166.0],
+    [176.0, 198.0, 178.0],
+    [226.0, 200.0, 152.0],
+    [172.0, 192.0, 212.0],
+    [236.0, 214.0, 196.0],
+];
+pub const TILES: [Rgb; 3] = [
+    [176.0, 106.0, 84.0],
+    [122.0, 118.0, 138.0],
+    [150.0, 96.0, 86.0],
+];
 
 /// Who is behind the windows, which decides when they are lit.
 #[derive(Clone, Copy, PartialEq)]
@@ -161,7 +172,10 @@ fn caps(b: &Block, top: [f32; 3], lay: &Layout, f: &mut dyn FnMut(Piece, bool)) 
             Cap::Dome(h) => {
                 let h = lay.d(h);
                 let half = (x1 - x0) / 2.0;
-                let arc: Vec<P> = (0..=18).map(|k| std::f32::consts::PI * k as f32 / 18.0).map(|a| (mid - half * a.cos(), y + 1.0 - (h + 1.0) * a.sin())).collect();
+                let arc: Vec<P> = (0..=18)
+                    .map(|k| std::f32::consts::PI * k as f32 / 18.0)
+                    .map(|a| (mid - half * a.cos(), y + 1.0 - (h + 1.0) * a.sin()))
+                    .collect();
                 f(arc, true);
                 (x0, x1, y) = (mid, mid, y - h);
                 tip = (mid, y);
@@ -183,12 +197,23 @@ fn caps(b: &Block, top: [f32; 3], lay: &Layout, f: &mut dyn FnMut(Piece, bool)) 
             }
             Cap::Gable(h) => {
                 let (h, eave) = (lay.d(h), lay.d(1.6));
-                f(vec![(x0 - eave, y + 1.0), (mid, y - h), (x1 + eave, y + 1.0)], true);
+                f(
+                    vec![(x0 - eave, y + 1.0), (mid, y - h), (x1 + eave, y + 1.0)],
+                    true,
+                );
                 tip = (mid, y - h);
             }
             Cap::Mansard(h) => {
                 let (h, inset, eave) = (lay.d(h), (x1 - x0) * 0.11, lay.d(1.4));
-                f(vec![(x0 - eave, y + 1.0), (x0 + inset, y - h), (x1 - inset, y - h), (x1 + eave, y + 1.0)], true);
+                f(
+                    vec![
+                        (x0 - eave, y + 1.0),
+                        (x0 + inset, y - h),
+                        (x1 - inset, y - h),
+                        (x1 + eave, y + 1.0),
+                    ],
+                    true,
+                );
                 (x0, x1, y) = (x0 + inset, x1 - inset, y - h);
                 tip = (mid, y);
             }
@@ -208,7 +233,15 @@ fn caps(b: &Block, top: [f32; 3], lay: &Layout, f: &mut dyn FnMut(Piece, bool)) 
             Cap::Stack(off, h) => {
                 let (c, half, h) = (mid + (x1 - x0) * off, lay.d(2.4), lay.d(h));
                 f(rect(c - half, y - h, c + half, y + 1.0), false);
-                f(rect(c - half * 1.4, y - h - lay.d(1.6), c + half * 1.4, y - h + 0.5), false);
+                f(
+                    rect(
+                        c - half * 1.4,
+                        y - h - lay.d(1.6),
+                        c + half * 1.4,
+                        y - h + 0.5,
+                    ),
+                    false,
+                );
             }
         }
     }
@@ -226,12 +259,29 @@ fn shape(b: &Block, base: f32, lay: &Layout, k: u32) -> Shape {
     let last = tiers[tiers.len() - 1];
     let roof = [last[0], last[2], last[1]];
     let tip = caps(b, roof, lay, &mut |_, _| {});
-    Shape { tiers, tip, roof, glassy: matches!(b.skin, Skin::Ribbon(..) | Skin::Fins(..)), tone: hash2(k, 977) * 2.0 - 1.0, hue: ((hash2(k, 983) * WALLS.len() as f32) as usize % WALLS.len(), (hash2(k, 991) * TILES.len() as f32) as usize % TILES.len()) }
+    Shape {
+        tiers,
+        tip,
+        roof,
+        glassy: matches!(b.skin, Skin::Ribbon(..) | Skin::Fins(..)),
+        tone: hash2(k, 977) * 2.0 - 1.0,
+        hue: (
+            (hash2(k, 983) * WALLS.len() as f32) as usize % WALLS.len(),
+            (hash2(k, 991) * TILES.len() as f32) as usize % TILES.len(),
+        ),
+    }
 }
 
 fn windows(b: &Block, s: &Shape, lay: &Layout, salt: u32, out: &mut Vec<Win>) {
     let mut n = out.len() as u32;
-    let who_of = |k: u32| [hash2(k, salt + 11) as f64, hash2(k, salt + 23) as f64, hash2(k, salt + 37) as f64, hash2(k, salt + 41) as f64];
+    let who_of = |k: u32| {
+        [
+            hash2(k, salt + 11) as f64,
+            hash2(k, salt + 23) as f64,
+            hash2(k, salt + 37) as f64,
+            hash2(k, salt + 41) as f64,
+        ]
+    };
     let office_of = |k: u32| match b.who {
         Use::Office => true,
         Use::Home => false,
@@ -255,7 +305,16 @@ fn windows(b: &Block, s: &Shape, lay: &Layout, salt: u32, out: &mut Vec<Win>) {
                 while y + wh < bottom - py * 0.25 {
                     for c in 0..cols {
                         n += 1;
-                        out.push(Win { x: x0 + pad + c as f32 * px, y, w: ww, h: wh, who: who_of(n), tone: (hash2(n, salt + 53) * 4.0) as u8 & 3, office: office_of(n), strip: false });
+                        out.push(Win {
+                            x: x0 + pad + c as f32 * px,
+                            y,
+                            w: ww,
+                            h: wh,
+                            who: who_of(n),
+                            tone: (hash2(n, salt + 53) * 4.0) as u8 & 3,
+                            office: office_of(n),
+                            strip: false,
+                        });
                     }
                     y += py;
                 }
@@ -276,9 +335,19 @@ fn windows(b: &Block, s: &Shape, lay: &Layout, salt: u32, out: &mut Vec<Win>) {
                         if hash2(n, salt + 71) < 0.14 {
                             who = who_of(n);
                         } else {
-                            who[1] = (who[1] + 0.16 * (hash2(n, salt + 73) as f64 - 0.5)).clamp(0.0, 1.0);
+                            who[1] = (who[1] + 0.16 * (hash2(n, salt + 73) as f64 - 0.5))
+                                .clamp(0.0, 1.0);
                         }
-                        out.push(Win { x: x0 + inset + k as f32 * step + gap / 2.0, y, w: step - gap, h: band, who, tone: (hash2(n, salt + 53) * 4.0) as u8 & 3, office: office_of(n), strip: true });
+                        out.push(Win {
+                            x: x0 + inset + k as f32 * step + gap / 2.0,
+                            y,
+                            w: step - gap,
+                            h: band,
+                            who,
+                            tone: (hash2(n, salt + 53) * 4.0) as u8 & 3,
+                            office: office_of(n),
+                            strip: true,
+                        });
                     }
                     y += fh;
                 }
@@ -289,25 +358,52 @@ fn windows(b: &Block, s: &Shape, lay: &Layout, salt: u32, out: &mut Vec<Win>) {
 
 /// Lay one row of blocks out for the screen. Nothing in it may rise above `top` (design units);
 /// `extra` adds whatever else belongs to the silhouette.
-pub fn row(sh: &mut Shaper, lay: &Layout, base: f32, top: f32, blocks: &'static [Block], salt: u32, extra: impl FnOnce(&mut Shaper, &Layout)) -> Row {
+pub fn row(
+    sh: &mut Shaper,
+    lay: &Layout,
+    base: f32,
+    top: f32,
+    blocks: &'static [Block],
+    salt: u32,
+    extra: impl FnOnce(&mut Shaper, &Layout),
+) -> Row {
     let (w, h) = (lay.w as usize, lay.h as usize);
-    let shapes: Vec<Shape> = blocks.iter().enumerate().map(|(k, b)| shape(b, base, lay, salt + k as u32)).collect();
+    let shapes: Vec<Shape> = blocks
+        .iter()
+        .enumerate()
+        .map(|(k, b)| shape(b, base, lay, salt + k as u32))
+        .collect();
     let mut wins = Vec::new();
     let mask = if sh.begin(0.0, lay.dy(top).max(0.0), lay.w, lay.h, w, h) {
         for (b, s) in blocks.iter().zip(&shapes) {
             for t in &s.tiers {
-                sh.poly(&[(t[0], t[1]), (t[2], t[1]), (t[2], t[3] + 2.0), (t[0], t[3] + 2.0)]);
+                sh.poly(&[
+                    (t[0], t[1]),
+                    (t[2], t[1]),
+                    (t[2], t[3] + 2.0),
+                    (t[0], t[3] + 2.0),
+                ]);
             }
             caps(b, s.roof, lay, &mut |piece, _| sh.poly(&piece));
             windows(b, s, lay, salt, &mut wins);
         }
         extra(sh, lay);
-        sh.poly(&[(-2.0, lay.dy(base)), (lay.w + 2.0, lay.dy(base)), (lay.w + 2.0, lay.h + 2.0), (-2.0, lay.h + 2.0)]);
+        sh.poly(&[
+            (-2.0, lay.dy(base)),
+            (lay.w + 2.0, lay.dy(base)),
+            (lay.w + 2.0, lay.h + 2.0),
+            (-2.0, lay.h + 2.0),
+        ]);
         sh.mask(w)
     } else {
         (h, Vec::new())
     };
-    Row { mask, blocks, shapes, wins }
+    Row {
+        mask,
+        blocks,
+        shapes,
+        wins,
+    }
 }
 
 /// Is this point of the screen covered by a mask?
@@ -324,9 +420,22 @@ pub fn covered(mask: &(usize, Vec<u8>), w: usize, x: f32, y: f32) -> bool {
 pub fn lights(wins: &[Win], sc: &Scene, out: &mut Lights, lit: &mut usize) {
     for w in wins {
         // every office has a few lights nobody turned off; most of those go out with the cleaners at one
-        let left_on = w.office && sc.el_eff < 0.5 && (w.who[3] < 0.025 || (w.who[3] < 0.075 && (sc.t >= 15.0 || sc.t < 1.0)));
-        let s = window_state(&w.who, w.office, w.tone as usize, sc.t, if w.office { sc.dow } else { sc.home_dow }, sc.el_eff as f64)
-            .or(if left_on { Some(crate::color::COOL[w.tone as usize]) } else { None });
+        let left_on = w.office
+            && sc.el_eff < 0.5
+            && (w.who[3] < 0.025 || (w.who[3] < 0.075 && (sc.t >= 15.0 || sc.t < 1.0)));
+        let s = window_state(
+            &w.who,
+            w.office,
+            w.tone as usize,
+            sc.t,
+            if w.office { sc.dow } else { sc.home_dow },
+            sc.el_eff as f64,
+        )
+        .or(if left_on {
+            Some(crate::color::COOL[w.tone as usize])
+        } else {
+            None
+        });
         *lit += s.is_some() as usize;
         out.on.push(s);
     }
@@ -348,15 +457,30 @@ pub struct Paint {
 }
 
 /// Paint a row: the silhouette, the light along the edges that face it, and the windows.
-pub fn paint(d: &mut Draw<Canvas>, sc: &Scene, lay: &Layout, row: &Row, on: &[Option<Rgb>], bloom: &mut Bloom, p: &Paint) {
+pub fn paint(
+    d: &mut Draw<Canvas>,
+    sc: &Scene,
+    lay: &Layout,
+    row: &Row,
+    on: &[Option<Rgb>],
+    bloom: &mut Bloom,
+    p: &Paint,
+) {
     let (my0, mask) = &row.mask;
     let w = lay.w as usize;
     if sc.snow > 0.3 {
         let snow = mix(p.col, crate::color::hex(sc.p.snow), 0.85);
-        d.s.stamp(mask, *my0 as i32, -(lay.d(2.6)).round() as i32, |_| (snow, 1.0));
+        d.s.stamp(mask, *my0 as i32, -(lay.d(2.6)).round() as i32, |_| {
+            (snow, 1.0)
+        });
     } else if sc.frost > 0.05 {
         let rime = mix(p.col, crate::color::hex(sc.p.snow), 0.55);
-        d.s.stamp(mask, *my0 as i32, -(lay.d(1.1)).round().max(1.0) as i32, |_| (rime, 0.75 * sc.frost));
+        d.s.stamp(
+            mask,
+            *my0 as i32,
+            -(lay.d(1.1)).round().max(1.0) as i32,
+            |_| (rime, 0.75 * sc.frost),
+        );
     }
     d.s.stamp(mask, *my0 as i32, 0, |_| (p.col, 1.0));
     bloom.hide(mask, w, *my0);
@@ -364,11 +488,17 @@ pub fn paint(d: &mut Draw<Canvas>, sc: &Scene, lay: &Layout, row: &Row, on: &[Op
         let warm = p.hue * (0.22 + 0.78 * sc.day);
         for (b, s) in row.blocks.iter().zip(&row.shapes) {
             let col = mix(shade(p.col, p.tone * s.tone), WALLS[s.hue.0], warm);
-            let roof = mix(shade(p.col, p.tone * s.tone - 0.085), TILES[s.hue.1], warm * 1.5);
+            let roof = mix(
+                shade(p.col, p.tone * s.tone - 0.085),
+                TILES[s.hue.1],
+                warm * 1.5,
+            );
             for t in &s.tiers {
                 d.rect(t[0], t[1], t[2], t[3], col, 1.0);
             }
-            caps(b, s.roof, lay, &mut |piece, slates| d.poly(&piece, if slates { roof } else { col }, 1.0));
+            caps(b, s.roof, lay, &mut |piece, slates| {
+                d.poly(&piece, if slates { roof } else { col }, 1.0)
+            });
         }
     }
 
@@ -406,11 +536,94 @@ pub fn paint(d: &mut Draw<Canvas>, sc: &Scene, lay: &Layout, row: &Row, on: &[Op
             continue;
         }
         if let Some(g) = *state {
-            d.rect(win.x, win.y, win.x + win.w, win.y + win.h, g, if win.strip { 0.86 } else { 0.94 });
+            d.rect(
+                win.x,
+                win.y,
+                win.x + win.w,
+                win.y + win.h,
+                g,
+                if win.strip { 0.86 } else { 0.94 },
+            );
             let pad = win.h.min(win.w) * 0.2;
-            bloom.light(win.x - pad, win.y - pad, win.x + win.w + pad, win.y + win.h + pad, mix(g, WARM[1], 0.5), if win.strip { 0.5 } else { 0.74 } * power);
+            bloom.light(
+                win.x - pad,
+                win.y - pad,
+                win.x + win.w + pad,
+                win.y + win.h + pad,
+                mix(g, WARM[1], 0.5),
+                if win.strip { 0.5 } else { 0.74 } * power,
+            );
         } else if glass_a > 0.03 {
-            d.rect(win.x, win.y, win.x + win.w, win.y + win.h, glass, glass_a * if win.strip { 0.55 } else { 1.0 });
+            d.rect(
+                win.x,
+                win.y,
+                win.x + win.w,
+                win.y + win.h,
+                glass,
+                glass_a * if win.strip { 0.55 } else { 1.0 },
+            );
         }
+    }
+}
+
+// ── land drawn by hand ───────────────────────────────────────────────────────
+
+/// A smooth line through hand-placed points.
+pub fn curve(pts: &[P], steps: usize) -> Vec<P> {
+    let n = pts.len();
+    let mut out = Vec::with_capacity((n - 1) * steps + 1);
+    for i in 0..n - 1 {
+        let (p0, p1, p2, p3) = (
+            pts[i.saturating_sub(1)],
+            pts[i],
+            pts[i + 1],
+            pts[(i + 2).min(n - 1)],
+        );
+        for k in 0..steps {
+            let t = k as f32 / steps as f32;
+            let (t2, t3) = (t * t, t * t * t);
+            let f = |a: f32, b: f32, c: f32, d: f32| {
+                0.5 * (2.0 * b
+                    + (c - a) * t
+                    + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2
+                    + (3.0 * b - a - 3.0 * c + d) * t3)
+            };
+            out.push((f(p0.0, p1.0, p2.0, p3.0), f(p0.1, p1.1, p2.1, p3.1)));
+        }
+    }
+    out.push(pts[n - 1]);
+    out
+}
+
+/// The height of a line of points at `x`.
+pub fn height_at(line: &[P], x: f32) -> f32 {
+    for w in line.windows(2) {
+        if x <= w[1].0 {
+            let f = ((x - w[0].0) / (w[1].0 - w[0].0).max(1e-3)).clamp(0.0, 1.0);
+            return w[0].1 + (w[1].1 - w[0].1) * f;
+        }
+    }
+    line[line.len() - 1].1
+}
+
+pub fn to_px(lay: &Layout, pts: &[P]) -> Vec<P> {
+    pts.iter().map(|p| (lay.dx(p.0), lay.dy(p.1))).collect()
+}
+
+/// Grass along the top of a bank, leaning with the wind: `n` blades between `x0` and `x1`.
+pub fn grass<S: Surface>(d: &mut Draw<S>, sc: &Scene, lay: &Layout, bank: &[P], (x0, x1, n): (f32, f32, u32), t: f32, col: Rgb) {
+    let u = lay.u;
+    let lean = sc.wind_x.clamp(-1.4, 1.4);
+    let gust = (0.25 + lean.abs()).min(1.0);
+    let salt = x0 as u32;
+    for i in 0..n {
+        let x = x0 + (x1 - x0) * hash2(i, salt + 101);
+        let foot = height_at(bank, x) + 2.0;
+        let tall = 9.0 + 19.0 * hash2(i, salt + 103).powf(1.6);
+        let own = (hash2(i, salt + 107) - 0.5) * 0.5;
+        let sway = (t * (1.3 + hash2(i, salt + 109)) + x * 0.045).sin() * 0.10 * gust;
+        let bend = lean * 0.34 + own + sway;
+        let (px, py, h) = (lay.dx(x), lay.dy(foot), lay.d(tall));
+        d.path(&[(px, py), (px + bend * h * 0.35, py - h * 0.58), (px + bend * h, py - h)], (1.25 * u).max(0.9), col, 1.0);
     }
 }

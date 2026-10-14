@@ -40,6 +40,8 @@ pub struct Moon {
     pub lit: f64,
     pub waxing: bool,
     pub elong: f64,
+    /// how far it stands north of the sun's path, degrees
+    pub beta: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -51,6 +53,7 @@ pub struct Planet {
     pub elong: f64,
 }
 
+#[derive(Clone)]
 pub struct Ephemeris {
     pub sun: Body,
     pub moon: Moon,
@@ -190,7 +193,7 @@ pub fn ephemeris(ts: f64, lat_deg: f64, lon_deg: f64, horizon: f64) -> Ephemeris
     };
     let sun = body(s_ra, s_dec, -0.833);
     let elong = (lam_m - lam_s).rem_euclid(360.0);
-    let moon = Moon { body: body(m_ra, m_dec, 0.125), lit: (1.0 - rad(elong).cos()) / 2.0, waxing: elong < 180.0, elong };
+    let moon = Moon { body: body(m_ra, m_dec, 0.125), lit: (1.0 - rad(elong).cos()) / 2.0, waxing: elong < 180.0, elong, beta: beta.to_degrees() };
 
     let earth = orbit(&EARTH, t);
     let mut planets = Vec::new();

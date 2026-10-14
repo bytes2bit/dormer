@@ -82,7 +82,10 @@ pub fn explain(sc: &Scene, view: &dyn crate::views::View, stars: &[crate::sky::S
     let mut out = Vec::new();
     let place = if sc.place.name.is_empty() { String::new() } else { format!("  ·  {}", sc.place.name) };
     out.push(format!("{} {}{}", DAYS[sc.dow], clock(sc.ts), place));
-    if sun.el > 0.0 {
+    // somewhere with no sky of ours, the weather is news from home and the view tells the rest
+    let here = !sc.void;
+    if !here {
+    } else if sun.el > 0.0 {
         out.push(format!("sun    {}° up in the {}, sets {}", sun.el.round(), compass(sun.az), clock(sun.set)));
     } else if sun.ha > 0.0 {
         out.push(format!("sun    set at {}, now {}° below the horizon", clock(sun.set), (-sun.el).round()));
@@ -94,10 +97,13 @@ pub fn explain(sc: &Scene, view: &dyn crate::views::View, stars: &[crate::sky::S
     } else {
         "below the horizon".to_string()
     };
-    out.push(format!("moon   {}, {}% lit, {}", phase_name(moon.elong), (moon.lit * 100.0).round(), place));
-    if let Some(line) = night_sky(sc, stars) {
-        out.push(format!("stars  {}", line));
+    if here {
+        out.push(format!("moon   {}, {}% lit, {}", phase_name(moon.elong), (moon.lit * 100.0).round(), place));
+        if let Some(line) = night_sky(sc, stars) {
+            out.push(format!("stars  {}", line));
+        }
     }
+    let label = if here { "sky " } else { "home" };
     if wx.known {
         let note = match wx.note {
             "pretend" => "  (pretending)",
@@ -114,9 +120,9 @@ pub fn explain(sc: &Scene, view: &dyn crate::views::View, stars: &[crate::sky::S
             }
             _ => String::new(),
         };
-        out.push(format!("sky    {}, {}°, wind {} km/h from the {}{}{}", wx.kind, wx.temp.round(), wx.wind.round(), compass(wx.wdir), coming, note));
+        out.push(format!("{}   {}, {}°, wind {} km/h from the {}{}{}", label, wx.kind, wx.temp.round(), wx.wind.round(), compass(wx.wdir), coming, note));
     } else {
-        out.push("sky    no recent weather reading, so a fair sky is assumed".to_string());
+        out.push(format!("{}   no recent weather reading, so a fair sky is assumed", label));
     }
     for (label, text) in view.words(sc) {
         out.push(format!("{:<6} {}", label, text));

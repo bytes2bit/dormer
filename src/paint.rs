@@ -7,12 +7,12 @@
 use std::f32::consts::PI;
 
 use crate::color::{hex, mix, shade, smooth, Rgb, AMBER, BLUE, ROSE, SAGE, STOPS, WHITE};
-use crate::gfx::{Blend, Bloom, Canvas, Draw, Shaper, Veil, P};
+use crate::gfx::{Blend, Bloom, Canvas, Draw, Patch, Shaper, Veil, P};
 use crate::props::{self, Layout};
 use crate::rng::{hash2, PyRng};
 use crate::scene::Scene;
-use crate::sky::{galactic, sky_at, star_at, Star};
-use crate::views::{Anchors, Spark, Stage, View};
+use crate::sky::{galactic, sky_at, star_at, Ephemeris, Star};
+use crate::views::{Anchors, Sky, Spark, Stage, View};
 
 /// A view laid out for one size of screen, and the stars that go over it.
 pub struct Cache {
@@ -59,26 +59,34 @@ pub fn render(sc: &mut Scene, cache: &Cache) -> (Canvas, Anchors) {
         }
     };
     let mut cv = Canvas::new(w, h);
-    let rows = sky_rows(sc, &lay);
-    cv.rows(&rows);
-    lap("sky");
-    milky_way(&mut cv, &cx);
-    lap("milky way");
-
     let mut sh = Shaper::new();
     let mut bloom = Bloom::new(w, h, 4);
-    wide_glows(&mut cv, &cx);
-    lap("wide glows");
+    let home = cache.view.sky() == Sky::Home;
+    if home {
+        let rows = sky_rows(sc, &lay);
+        cv.rows(&rows);
+        lap("sky");
+        milky_way(&mut cv, sc, &lay, &sc.eph, sc.night * sc.night * (1.0 - 0.85 * sc.moonlight));
+        lap("milky way");
+        wide_glows(&mut cv, &cx);
+        lap("wide glows");
+    }
     {
         let mut d = Draw::new(&mut cv, &mut sh);
-        stars(&mut d, &cx, &mut out);
-        lap("stars");
-        moon(&mut d, &cx);
-        sun(&mut d, &cx);
-        lap("sun, moon");
-        clouds(&mut d, &cx);
-        lap("clouds");
-        if !sc.live {
+        if home {
+            stars(&mut d, &cx, &mut out);
+            lap("stars");
+            moon(&mut d, &cx);
+            sun(&mut d, &cx);
+            lap("sun, moon");
+        }
+        cache.stage.heavens(&mut d, sc, &cache.stars, &mut out);
+        lap("heavens");
+        if home {
+            clouds(&mut d, &cx);
+            lap("clouds");
+        }
+        if !sc.live && home {
             for p in &sc.planes {
                 props::plane(&mut d, sc, &lay, lay.x(p[0]), lay.sy(p[1]), p[2], p[3], if sc.slot % 2 == 0 { 1.0 } else { 0.0 });
             }
@@ -87,15 +95,15 @@ pub fn render(sc: &mut Scene, cache: &Cache) -> (Canvas, Anchors) {
             }
             flock(&mut d, &cx);
         }
-        if sc.fireworks && !sc.live {
+        if sc.fireworks && !sc.live && home {
             fireworks(&mut d, &cx);
         }
-        if sc.balloon {
+        if sc.balloon && home {
             props::balloon(&mut d, sc, &lay, (sc.ts / 500.0) as f32);
         }
         cache.stage.ground(&mut d, sc, &lights, &mut bloom, &mut out);
         lap("ground");
-        if !sc.live {
+        if !sc.live && home {
             weather(&mut d, &cx);
         }
     }
@@ -140,15 +148,13 @@ fn sky_rows(sc: &Scene, lay: &Layout) -> Vec<Rgb> {
     rows
 }
 
-/// The band of the Milky Way, where it really lies tonight.
-fn milky_way(cv: &mut Canvas, cx: &Ctx) {
-    let (sc, lay) = (cx.sc, &cx.lay);
-    let vis = sc.night * sc.night * (1.0 - 0.85 * sc.moonlight);
+/// The band of the Milky Way, where it lies in the sky `eph` describes, as strongly as `vis`.
+pub fn milky_way(cv: &mut Canvas, sc: &Scene, lay: &Layout, eph: &Ephemeris, vis: f32) {
     if vis < 0.05 {
         return;
     }
     let div = ((16.0 * lay.u).round() as usize).max(4);
-    let mut field = Bloom::new(cx.cache.w, cx.cache.h, div);
+    let mut field = Bloom::new(cv.w, cv.h, div);
     let cell = div as f32;
     let bottom = lay.horizon() + cell;
     let star = hex(sc.p.star);
@@ -157,7 +163,7 @@ fn milky_way(cv: &mut Canvas, cx: &Ctx) {
         let mut x = 0.0;
         while x < lay.w {
             let (fx, fy) = ((x + cell / 2.0) / lay.w, (y + cell / 2.0 - lay.oy) / lay.hv);
-            let (ra, dec) = sky_at(&sc.eph, fx as f64, fy as f64);
+            let (ra, dec) = sky_at(eph, fx as f64, fy as f64);
             let (l, b) = galactic(ra, dec);
             let (l, b) = (l as f32, (b as f32).to_degrees());
             let band = (-(b / 8.5).powi(2)).exp();
@@ -201,18 +207,35 @@ fn wide_glows(cv: &mut Canvas, cx: &Ctx) {
     }
 }
 
+/// How the stars are to be shown.
+pub struct Starlight<'a> {
+    /// whose sky they are in
+    pub eph: &'a Ephemeris,
+    /// the faintest magnitude that shows
+    pub lim: f32,
+    /// how much of them the weather lets through
+    pub clear: f32,
+    /// seen through air: they twinkle, the planets are out, and now and then one falls
+    pub air: bool,
+}
+
 fn stars(d: &mut Draw<Canvas>, cx: &Ctx, out: &mut Anchors) {
-    let (sc, lay) = (cx.sc, &cx.lay);
-    let u = lay.u;
+    let sc = cx.sc;
     let el = sc.eph.sun.el as f32;
     let clear = (1.0 - smooth(0.45, 1.0, sc.cover)) * (1.0 - sc.fog);
     // The faintest magnitude that shows: only planets at sunset, everything by full night.
     let lim = -4.7 + 11.1 * smooth(0.5, -16.0, el) - 1.5 * sc.moonlight - 1.2 * (sc.lit_share * 2.0).min(1.0) * 0.5;
+    starfield(d, sc, &cx.lay, &cx.cache.stars, &Starlight { eph: &sc.eph, lim, clear, air: true }, out);
+}
+
+pub fn starfield(d: &mut Draw<Canvas>, sc: &Scene, lay: &Layout, all: &[Star], how: &Starlight, out: &mut Anchors) {
+    let u = lay.u;
+    let (lim, clear) = (how.lim, how.clear);
     if clear < 0.03 || lim < -4.6 {
         return;
     }
     let star = hex(sc.p.star);
-    let slot = if sc.live { 0 } else { sc.slot as u32 };
+    let slot = if sc.live || !how.air { 0 } else { sc.slot as u32 };
     let tinted = |tint: f32| {
         if tint > 0.0 {
             mix(star, [255.0, 196.0, 150.0], 0.62 * tint)
@@ -239,15 +262,15 @@ fn stars(d: &mut Draw<Canvas>, cx: &Ctx, out: &mut Anchors) {
             }
         }
         d.dot(x, y, r, r, col, a * tw, Blend::Screen);
-        if !steady && mag < 3.4 && out.stars.len() < 110 {
+        if !steady && how.air && mag < 3.4 && out.stars.len() < 110 {
             out.stars.push(Spark { x, y, r, a, col, low: 1.0 - smooth(4.0, 40.0, height) });
         }
     };
-    for (k, s) in cx.cache.stars.iter().enumerate() {
+    for (k, s) in all.iter().enumerate() {
         if s.mag > lim {
             continue;
         }
-        let (fx, fy, height) = star_at(&sc.eph, s.ra, s.dec);
+        let (fx, fy, height) = star_at(how.eph, s.ra, s.dec);
         if height < 0.6 || !(-0.01..=1.01).contains(&fx) {
             continue;
         }
@@ -256,7 +279,10 @@ fn stars(d: &mut Draw<Canvas>, cx: &Ctx, out: &mut Anchors) {
             point(d, x, y, s.mag, tinted(s.tint), height as f32, false, k as u32);
         }
     }
-    for p in &sc.eph.planets {
+    if !how.air {
+        return;
+    }
+    for p in &how.eph.planets {
         if p.body.el > 1.0 && (p.mag as f32) < lim && p.elong > 9.0 {
             let col = match p.name {
                 "Mars" => [255.0, 170.0, 130.0],
@@ -304,13 +330,28 @@ fn moon(d: &mut Draw<Canvas>, cx: &Ctx) {
         let ring: Vec<P> = (0..=72).map(|i| i as f32 / 72.0 * 2.0 * PI).map(|a| (x + a.cos() * r * 6.6, y + a.sin() * r * 6.6)).collect();
         d.path_mode(&ring, 3.0 * lay.u, col, 0.07 * lit * vis, Blend::Screen);
     }
+    // The bright limb faces the sun, wherever the sun is, so the crescent tilts as the real one does.
+    let Some(face) = lit_disc(d, (x, y), r, col, lit, (lay.x(sc.eph.sun.x as f32), lay.y(sc.eph.sun.y as f32)), vis) else { return };
+    // the seas
+    if d.sh.begin(x - r, y - r, x + r, y + r, d.s.w, d.s.h) {
+        for (mx, my, rx, ry) in [(-0.34, -0.30, 0.30, 0.24), (0.14, -0.42, 0.24, 0.17), (0.34, 0.06, 0.24, 0.26), (-0.20, 0.30, 0.26, 0.17), (0.0, -0.04, 0.15, 0.13)] {
+            d.sh.ellipse(x + mx * r, y + my * r, rx * r, ry * r);
+        }
+        let mut seas = d.sh.take();
+        seas.clip(&face);
+        let sea = mix(col, sc.sky[2], 0.55);
+        seas.paint(d.s, Blend::Over, |_| (sea, 0.26 * vis));
+    }
+}
+
+/// A moon: a disc of which the fraction `lit` is bright, on the side `sun` lies. The dark part
+/// shows faintly. Returns the bright part, for marking.
+pub fn lit_disc(d: &mut Draw<Canvas>, (x, y): P, r: f32, col: Rgb, lit: f32, sun: P, vis: f32) -> Option<Patch> {
     d.circle(x, y, r, col, 0.10 * vis); // earthshine
     if lit <= 0.02 {
-        return;
+        return None;
     }
-    // The bright limb faces the sun, wherever the sun is, so the crescent tilts as the real one does.
-    let (sx, sy) = (lay.x(sc.eph.sun.x as f32), lay.y(sc.eph.sun.y as f32));
-    let turn = (sy - y).atan2(sx - x);
+    let turn = (sun.1 - y).atan2(sun.0 - x);
     let (ct, st) = (turn.cos(), turn.sin());
     let place = |lx: f32, ly: f32| (x + (lx * ct - ly * st) * r, y + (lx * st + ly * ct) * r);
     let mut pts: Vec<P> = Vec::with_capacity(82);
@@ -323,21 +364,12 @@ fn moon(d: &mut Draw<Canvas>, cx: &Ctx) {
         pts.push(place(a.cos() * (1.0 - 2.0 * lit), a.sin()));
     }
     if !d.sh.begin(x - r - 1.0, y - r - 1.0, x + r + 1.0, y + r + 1.0, d.s.w, d.s.h) {
-        return;
+        return None;
     }
     d.sh.poly(&pts);
     let face = d.sh.take();
     face.paint(d.s, Blend::Over, |_| (col, vis));
-    // the seas
-    if d.sh.begin(x - r, y - r, x + r, y + r, d.s.w, d.s.h) {
-        for (mx, my, rx, ry) in [(-0.34, -0.30, 0.30, 0.24), (0.14, -0.42, 0.24, 0.17), (0.34, 0.06, 0.24, 0.26), (-0.20, 0.30, 0.26, 0.17), (0.0, -0.04, 0.15, 0.13)] {
-            d.sh.ellipse(x + mx * r, y + my * r, rx * r, ry * r);
-        }
-        let mut seas = d.sh.take();
-        seas.clip(&face);
-        let sea = mix(col, sc.sky[2], 0.55);
-        seas.paint(d.s, Blend::Over, |_| (sea, 0.26 * vis));
-    }
+    Some(face)
 }
 
 fn sun(d: &mut Draw<Canvas>, cx: &Ctx) {

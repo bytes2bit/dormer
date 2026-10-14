@@ -8,36 +8,43 @@ at this moment, and keeps it alive on your desktop: the sun and moon where they
 really are, tonight's real stars and planets, the weather outside, the rhythm
 of the week, and a few signals from your own machine.
 
-![The three views by day, at sunset and at night](docs/views.jpg)
+![The five views](docs/views.jpg)
 
-## Three views
+## Five views
 
-The sky is the same in all of them. What stands under it is yours to choose:
+Three of them are places under your own sky, one is a valley in another world
+under that same sky, and one is on the moon, where the sky is the earth's to
+fill:
 
 | | |
 | --- | --- |
 | `rooftops` | The old town from a window in the roof: painted walls, tiled roofs, a clock tower, a domed hall. |
 | `city` | The middle of town across a railway viaduct: towers placed by hand, offices that keep office hours, trains to a timetable. |
 | `coast` | A headland and its lighthouse over the strait: the sea mirrors the sky, and the tide follows the moon. |
+| `moon` | A station on the Lake of Dreams. The earth hangs overhead with its true face and phase; the sun is up for a fortnight and down for a fortnight. |
+| `vale` | A valley of hanging rocks, a wizard's tower and a great tree, with a second, ringed moon that keeps the week. |
 
 ```sh
 dormer view            # list them
-dormer view coast      # look out there from now on; the wallpaper fades over
+dormer view moon       # look out there from now on; the wallpaper fades over
 dormer view default    # back to what the config says
 ```
 
 Your machine shows in the same four ways everywhere, staged for the place:
 
-| | rooftops | city | coast |
-| --- | --- | --- | --- |
-| An AI coding agent is running | the lamp in the roof room | the lantern on the tallest tower | the lamp in the keeper's window |
-| Each running Docker container | a blue window under it | a blue floor under it | a blue lantern on a moored boat |
-| The processor is working hard | smoke from its stovepipe | steam off the tower's roof | smoke from the lean-to's stovepipe |
-| Sound is playing | notes drift from it | notes drift from it | notes drift from it |
+| | rooftops | city | coast | moon | vale |
+| --- | --- | --- | --- | --- | --- |
+| An AI coding agent is running | the lamp in the roof room | the lantern on the tallest tower | the lamp in the keeper's window | the lamp in the cupola | the lamp in the tower's top room |
+| Each running Docker container | a blue window under it | a blue floor under it | a blue lantern on a moored boat | a cargo pod lit blue | a rune lit blue on a standing stone |
+| The processor is working hard | smoke from its stovepipe | steam off the tower's roof | smoke from the lean-to's stovepipe | the vent blowing, the radiators glowing | violet smoke from the flue |
+| Sound is playing | notes drift from it | notes drift from it | notes drift from it | notes drift from it | notes drift from it |
 
 The lamp burns low and red when the battery is nearly flat.
 
 ## What the sky is telling you
+
+This is the sky of `rooftops`, `city`, `coast` and `vale`. The moon has none of
+it: see its own rows further down.
 
 | You see | It means |
 | --- | --- |
@@ -68,6 +75,19 @@ And in each view, a few things of its own:
 | | A ferry on the horizon | It left on the hour, and takes twelve minutes to cross. |
 | | Small boats with lamps; sails | Fishing before sunrise on a working day; sails out at the weekend when there is wind. |
 | | A fire on the dune | Friday and Saturday night. |
+| moon | The earth | Its real phase (the opposite of the moon's as you see it) and the side really turned towards the moon just now. The coasts are drawn by hand. Cloud over home is as thick as the weather reading says; the rest of the cloud is invented. A ring marks home when it is in sight. The disc is drawn larger than life. |
+| | The sun, the length of the shadows | The lunar day. The station has its noon just before full moon and its midnight just before new; shadows are long for days at each end. Its sky is black at noon and the stars never twinkle. |
+| | A red ring round a dark earth | The sun has gone behind it: a lunar eclipse at home. |
+| | Round windows lit, the garden glowing pink | Daytime at home: the crew keep your hours. One blue window means they are asleep. The tree in the garden keeps your season. |
+| | The lander | It comes down on the hour and leaves at half past. |
+| | The rover and two figures out on the plain | Working hours on a working day. |
+| | Someone sitting on the rock in front | Off duty: evenings in the week, most of the weekend. |
+| vale | The small ringed moon | The week. It rises on the left on Monday morning and sets on the right on Sunday night. |
+| | The waterfall | The weather: in spate when it rains, a trickle in a dry heat, a column of ice in a hard frost. |
+| | The great tree | The season: blossom, leaf, colour, bare branches. Three of its lanterns are lit on any night, all of them on Friday and Saturday. |
+| | Snow on the peaks | It comes further down the colder it is. |
+| | A ship in the air | It set off on the hour, and takes nine minutes to cross. |
+| | Lights in the hamlet and the tower | Village hours. On the hour the birds on the tower take off. |
 
 `dormer explain` says the same in words.
 
@@ -161,6 +181,15 @@ a `Stage` (lay out, paint the ground, draw what moves), and add it to `ALL` in
 pick it up from there. `coast.rs` is the one to read for land drawn by hand;
 `downtown.rs` for buildings.
 
+A view under our own sky gets the sun, moon, stars, clouds and weather painted
+for it, and may add something of its own behind the clouds in `heavens` (the
+little moon in `vale.rs`). A view that returns `Sky::Void` from `sky` gets
+nothing overhead and no weather, birds or planes: it paints the whole sky
+itself (`moonbase.rs`), with the painter's star field and Milky Way there to
+call. `Layout::scaled` and `Layout::moved` resize or slide one part of a view
+without rewriting its numbers. `dormer globe --out map.png` writes the earth's
+coastlines out flat, for checking them.
+
 Setting `DORMER_TIME` prints how long each stage of a still frame took;
 `DORMER_PROBE` makes `dormer live` report where its time goes every five
 seconds.
@@ -170,6 +199,7 @@ seconds.
 Rain on its own half-resolution surface (to cut its cost), car lights in the
 streets, trees swaying, an owl and bats at dusk, the ISS on its real passes,
 puddle sheen on wet roofs, crepuscular rays, configurable holidays, a view
-that changes with the day of the week, waves breaking on the rocks in a gale.
+that changes with the day of the week, waves breaking on the rocks in a gale,
+real cloud on the whole earth, a dragon for the vale.
 
 `prototype/` holds the original Python version this was rewritten from.

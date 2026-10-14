@@ -124,6 +124,8 @@ pub struct Scene {
     pub tide: f32,
     /// what the dev panel is holding this view's own knobs to
     pub knobs: Vec<(String, f64)>,
+    /// the view has no air: nothing falls, flies or blows there, and the weather is news from home
+    pub void: bool,
 }
 
 impl Scene {
@@ -146,6 +148,7 @@ pub struct Inputs<'a> {
     /// where the view puts its horizon
     pub horizon: f64,
     pub knobs: &'a [(String, f64)],
+    pub void: bool,
 }
 
 /// Cloud drift is kept below this, so it never loses precision.
@@ -159,7 +162,7 @@ pub fn wind_x(wx: &Weather, place: &Place) -> f32 {
 }
 
 pub fn scene(inp: Inputs) -> Scene {
-    let Inputs { ts, wx, mode, machine, place, drift, top, rates, horizon, knobs } = inp;
+    let Inputs { ts, wx, mode, machine, place, drift, top, rates, horizon, knobs, void } = inp;
     let p = palette(mode);
     let lt = tm::local(ts);
     let t = lt.hour as f64 + lt.min as f64 / 60.0 + lt.sec as f64 / 3600.0;
@@ -360,5 +363,6 @@ pub fn scene(inp: Inputs) -> Scene {
         lit_share: 0.0,
         tide,
         knobs: knobs.to_vec(),
+        void,
     }
 }

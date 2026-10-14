@@ -51,6 +51,13 @@ impl Layout {
         Layout { ox: self.ox + by / DW * self.w, ..*self }
     }
 
+    /// The same layout with everything drawn in design units made `k` times as big, so that the
+    /// point `from` lands where `to` was: a way to resize one part of a view as a piece.
+    pub fn scaled(&self, k: f32, from: (f32, f32), to: (f32, f32)) -> Layout {
+        let (w, hv) = (self.w * k, self.hv * k);
+        Layout { w, hv, ox: self.dx(to.0) - from.0 / DW * w, oy: self.dy(to.1) - from.1 / DH * hv, ..*self }
+    }
+
     /// A height in the sky, as a fraction of the picture the sky was first drawn for: clouds,
     /// birds and planes keep their place above the horizon wherever a view puts it.
     pub fn sy(&self, f: f32) -> f32 {
