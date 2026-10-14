@@ -3,6 +3,7 @@
 mod color;
 mod dev;
 mod gfx;
+mod interaction;
 mod live;
 mod paint;
 mod props;
