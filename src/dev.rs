@@ -166,6 +166,14 @@ struct Panel {
     /// where each view's name is written: first column, one past the last, which view
     tabs: Vec<(usize, usize, usize)>,
     cache: Cache,
+    group: usize,
+    groups: Vec<(usize, usize, usize)>,
+    drag: Option<(&'static str, (usize, usize))>,
+    peek_until: f64,
+    preview: bool,
+    fade: Fade,
+    pending: bool,
+    published_at: f64,
 }
 
 impl Panel {
@@ -184,6 +192,14 @@ impl Panel {
             row_of: Vec::new(),
             tabs: Vec::new(),
             cache: Cache::new(view, config().seed, 320, 200),
+            group: 0,
+            groups: Vec::new(),
+            drag: None,
+            peek_until: 0.0,
+            preview: false,
+            fade: Fade::new(),
+            pending: false,
+            published_at: 0.0,
         };
         p.refresh_real();
         p
@@ -257,6 +273,7 @@ impl Panel {
         let Some(row) = self.rows.iter().find(|r| r.key == key).copied() else { return };
         let (lo, hi, step) = (row.lo, row.hi, row.step);
         let v = ((v / step).round() * step).clamp(lo, hi);
+        if key != "view" && (v - self.value(key)).abs() < 1e-8 { self.adjusting(); return; }
         if key == "view" {
             let id = views::ALL[v as usize].id();
             // a knob of the view being left means nothing in the next one
@@ -268,8 +285,10 @@ impl Panel {
             } else {
                 self.set.insert("view".to_string(), json!(id));
             }
+            self.rows = rows_for(self.view());
             return self.commit();
         }
+        self.adjusting();
         if (v - self.value_real(key)).abs() < step / 2.0 && key != "time" {
             self.set.remove(key);
         } else {
@@ -283,98 +302,158 @@ impl Panel {
     }
 
     fn commit(&mut self) {
+        self.pending = true;
+    }
+
+    fn publish(&mut self) -> bool {
+        if !self.pending || tm::mono() - self.published_at < 1.0 / 30.0 { return false; }
+        self.pending = false;
+        self.published_at = tm::mono();
         sources::write_atomic(&cache_file("dev.json"), &json!({"pid": std::process::id(), "set": self.set}).to_string());
         self.describe();
         self.painter.changed.store(true, Ordering::SeqCst);
+        true
+    }
+
+    fn adjusting(&mut self) {
+        self.peek_until = tm::mono() + 0.9;
+        self.fade.set(true);
+    }
+
+    fn select_group(&mut self, group: usize) {
+        self.group = group.min(4);
+        let label = ["when", "weather", "yours", "how often", "this view"][self.group];
+        let mut inside = false;
+        if let Some(r) = self.rows.iter().find(|r| {
+            if r.key.is_empty() { inside = r.label == label; false } else { inside }
+        }) { self.at = r.key; }
+        self.peek_until = 0.0;
+        self.preview = false;
+        self.drag = None;
+        self.fade.set(false);
     }
 
     fn paint(&mut self, out: &mut impl Write) {
         let (rows_n, cols) = term_size();
+        let peek = self.preview || tm::mono() < self.peek_until || self.drag.is_some();
+        self.fade.set(peek);
         let mut s = String::from("\x1b[H\x1b[2J");
         let (accent, dim, bold, off) = ("\x1b[33m", "\x1b[90m", "\x1b[1m", "\x1b[0m");
         let mut put = |y: usize, x: usize, text: &str, style: &str| {
             if y + 1 < rows_n.max(1) && x + 1 < cols {
-                let room = cols - 1 - x;
-                let cut: String = text.chars().take(room).collect();
+                let cut: String = text.chars().take(cols - 1 - x).collect();
                 s.push_str(&format!("\x1b[{};{}H{}{}{}", y + 1, x + 1, style, cut, off));
             }
         };
         put(0, 2, "dormer", &format!("{}{}", accent, bold));
-        put(0, 9, "dev panel", dim);
-        let state = if sources::live_pid() != 0 { "live".to_string() } else { self.painter.status.lock().unwrap().clone() };
-        put(0, cols.saturating_sub(2 + state.chars().count()).max(20), &state, if state == "drawing" { accent } else { dim });
-        for (i, line) in self.info.iter().take(5).enumerate() {
-            put(1 + i, 2, line, if i == 0 { bold } else { dim });
-        }
-        let (label_w, value_w) = (17usize, 18usize);
-        let (bar_x, bar_w) = (2 + label_w, cols.saturating_sub(2 + label_w + value_w + 3).max(8));
+        put(0, 10, if peek { "preview" } else { "scene controls" }, dim);
+        let overrides = self.set.len();
+        let drawing = self.painter.status.lock().unwrap().as_str() == "drawing";
+        let status = if drawing { "drawing".to_string() } else if overrides == 0 { "following reality".to_string() } else { format!("{} held", overrides) };
+        put(0, cols.saturating_sub(status.len() + 2).max(27), &status, dim);
+        let (label_w, value_w) = (17usize, 15usize);
+        let bar_x = 2 + label_w;
+        let bar_w = cols.saturating_sub(bar_x + value_w + 4).max(2);
         self.bar = (bar_x, bar_w);
-        self.row_of.clear();
         self.tabs.clear();
-        let lines = self.rows.len() + 1;
-        let groups = self.rows.iter().filter(|r| r.key.is_empty()).count();
-        let roomy = rows_n >= 7 + lines + groups + 3; // space for a blank line between groups?
+        self.groups.clear();
+        self.row_of.clear();
         let view = self.view();
-        let mut y = 7;
-        for (i, r) in self.rows.clone().into_iter().enumerate() {
-            let chosen = r.key == self.at;
-            if r.key.is_empty() {
-                if i > 0 && roomy {
-                    y += 1;
-                }
-                put(y, 2, r.label, dim);
-                put(y, 3 + r.label.len(), &"─".repeat(cols.saturating_sub(6 + r.label.len())), dim);
-                y += 1;
-                continue;
+        if !peek {
+            let mut x = 2;
+            for (k, v) in views::ALL.iter().enumerate() {
+                let text = if v.id() == view.id() { format!("[{}]", v.id()) } else { v.id().to_string() };
+                put(2, x, &text, if v.id() == view.id() { accent } else { dim });
+                self.tabs.push((x, x + text.len(), k));
+                x += text.len() + 2;
             }
-            self.row_of.push((y, i));
-            put(y, 0, if chosen { "▸" } else { " " }, &format!("{}{}", accent, bold));
-            if r.key == "view" {
-                // the views side by side, the one in the picture marked
-                let bent = self.set.contains_key("view");
-                let mut x = 2;
-                for (k, v) in views::ALL.iter().enumerate() {
-                    let on = v.id() == view.id();
-                    let text = format!("{} {}", if on { "●" } else { "○" }, v.id());
-                    let style = if on { format!("{}{}", if bent || chosen { accent } else { "" }, bold) } else { dim.to_string() };
-                    put(y, x, &text, &style);
-                    self.tabs.push((x, x + text.chars().count(), k));
-                    x += text.chars().count() + 4;
-                }
-                put(y + 1, 4, view.about(), dim);
-                y += 2;
-                continue;
+            put(3, 2, view.about(), dim);
+            let mut x = 2;
+            for (k, label) in ["Time", "Weather", "Machine", "Motion", "Scene"].iter().enumerate() {
+                let text = format!("{} {}", k + 1, label);
+                put(5, x, &text, if k == self.group { accent } else { dim });
+                self.groups.push((x, x + text.len(), k));
+                x += text.len() + 2;
             }
-            let (v, bent) = (self.value(r.key), self.set.contains_key(r.key));
-            put(y, 2, r.label, if chosen { bold } else if bent { "" } else { dim });
-            let place = |v: f64| (((v - r.lo) / (r.hi - r.lo)) * (bar_w - 1) as f64).round().clamp(0.0, (bar_w - 1) as f64) as usize;
-            let knob = place(v);
-            put(y, bar_x, &"━".repeat(knob), if bent { accent } else { dim });
-            put(y, bar_x + knob + 1, &"─".repeat(bar_w - knob - 1), dim);
-            if bent {
-                // a tick where reality is
-                let real = place(self.value_real(r.key));
-                if real != knob {
-                    put(y, bar_x + real, "┆", dim);
-                }
-            }
-            put(y, bar_x + knob, "●", &format!("{}{}", if bent { accent } else { "" }, bold));
-            let text = match r.show {
-                Some(f) => f(v),
-                None => show(r.key, v),
-            };
-            put(y, bar_x + bar_w + 2, &text, &format!("{}{}", if bent { accent } else { dim }, if chosen { bold } else { "" }));
-            y += 1;
         }
-        put(rows_n.saturating_sub(3), 2, "↑↓ choose   ←→ adjust   PgUp PgDn big steps   click or drag", dim);
-        put(rows_n.saturating_sub(2), 2, "r this one real   a all real   n now   q quit and restore", dim);
+        let label = ["when", "weather", "yours", "how often", "this view"][self.group];
+        let mut inside = false;
+        let indices: Vec<usize> = self.rows.iter().enumerate().filter_map(|(i, r)| {
+            if r.key.is_empty() { inside = r.label == label; None }
+            else if inside && r.key != "view" { Some(i) } else { None }
+        }).collect();
+        let selected = indices.iter().position(|i| self.rows[*i].key == self.at).unwrap_or(0);
+        let visible = rows_n.saturating_sub(11).max(1);
+        let (first, last) = visible_range(selected, visible, indices.len().saturating_sub(1));
+        let drawing: Vec<usize> = if peek { self.rows.iter().position(|r| r.key == self.at && r.key != "view").into_iter().collect() }
+            else { indices.iter().skip(first).take(last - first).copied().collect() };
+        if drawing.is_empty() { put(7, 2, "This view has no extra controls. Try another view above.", dim); }
+        for (n, i) in drawing.iter().copied().enumerate() {
+            let r = self.rows[i];
+            let y = if peek { 3 } else { 7 + n };
+            self.row_of.push((y, i));
+            let chosen = r.key == self.at;
+            let (v, held) = (self.value(r.key), self.set.contains_key(r.key));
+            put(y, 0, if chosen { ">" } else { " " }, accent);
+            put(y, 2, r.label, if chosen { bold } else { "" });
+            let knob = (((v - r.lo) / (r.hi - r.lo)) * (bar_w - 1) as f64).round().clamp(0.0, (bar_w - 1) as f64) as usize;
+            put(y, bar_x, &"━".repeat(knob), if held { accent } else { dim });
+            put(y, bar_x + knob + 1, &"─".repeat(bar_w - knob - 1), dim);
+            if held {
+                let real = (((self.value_real(r.key) - r.lo) / (r.hi - r.lo)) * (bar_w - 1) as f64).round().clamp(0.0, (bar_w - 1) as f64) as usize;
+                if real != knob { put(y, bar_x + real, "┆", dim); }
+            }
+            put(y, bar_x + knob, "●", if held { accent } else { bold });
+            let text = r.show.map(|f| f(v)).unwrap_or_else(|| show(r.key, v));
+            put(y, bar_x + bar_w + 2, &text, if held { accent } else { bold });
+        }
+        if peek {
+            put(5, 2, "Release to return · p keeps the view open", dim);
+        } else {
+            if let Some(line) = self.info.first() { put(rows_n.saturating_sub(4), 2, line, dim); }
+            put(rows_n.saturating_sub(3), 2, "Tab groups · ↑↓ select · ←→ / wheel adjust · drag slider", dim);
+            put(rows_n.saturating_sub(2), 2, "r reset one · a reset all · n now · p preview · q restore & quit", dim);
+        }
         let _ = out.write_all(s.as_bytes());
         let _ = out.flush();
     }
 
     /// False when it is time to quit.
     fn key(&mut self, k: Key) -> bool {
-        let list: Vec<Row> = self.rows.iter().filter(|r| !r.key.is_empty()).copied().collect();
+        let label = ["when", "weather", "yours", "how often", "this view"][self.group];
+        let mut inside = false;
+        let list: Vec<Row> = self.rows.iter().filter(|r| {
+            if r.key.is_empty() { inside = r.label == label; false } else { inside && r.key != "view" }
+        }).copied().collect();
+        if let Key::Group(g) = k { self.select_group(g); return true; }
+        if k == Key::NextGroup { self.select_group((self.group + 1) % 5); return true; }
+        if k == Key::PrevGroup { self.select_group((self.group + 4) % 5); return true; }
+        if k == Key::Preview { self.preview = !self.preview; self.peek_until = 0.0; return true; }
+        if k == Key::Release { self.drag = None; self.peek_until = tm::mono() + 0.25; return true; }
+        if k == Key::Quit { return false; }
+        if k == Key::AllReal { self.set.clear(); self.commit(); return true; }
+        if k == Key::Now { self.set.remove("time"); self.set.remove("day"); self.commit(); return true; }
+        if k == Key::Real { self.set.remove(self.at); self.commit(); return true; }
+        if let Key::Drag(x, _) = k {
+            if let Some((key, bar)) = self.drag {
+                if let Some(row) = self.rows.iter().find(|r| r.key == key).copied() { self.change(key, slider_value(x, bar, row.lo, row.hi, row.step)); }
+            }
+            return true;
+        }
+        if let Key::Mouse(x, y) = k {
+            if y == 2 {
+                if let Some(&(_, _, index)) = self.tabs.iter().find(|t| t.0 <= x && x < t.1) {
+                    self.change("view", index as f64);
+                    self.select_group(self.group);
+                }
+                return true;
+            }
+            if y == 5 {
+                if let Some(&(_, _, group)) = self.groups.iter().find(|t| t.0 <= x && x < t.1) { self.select_group(group); }
+                return true;
+            }
+        }
+        if list.is_empty() { return true; }
         let pos = list.iter().position(|r| r.key == self.at).unwrap_or(0);
         let row = list[pos];
         let (key, lo, hi, step, big) = (row.key, row.lo, row.hi, row.step, row.big);
@@ -409,18 +488,20 @@ impl Panel {
                     let r = self.rows[i];
                     self.at = r.key;
                     let (bar_x, bar_w) = self.bar;
-                    if r.key == "view" {
-                        if let Some(&(_, _, k)) = self.tabs.iter().find(|t| t.0 <= x + 1 && x < t.1 + 1) {
-                            self.change("view", k as f64);
-                        }
-                    } else if x + 1 >= bar_x && x <= bar_x + bar_w {
-                        let f = ((x as f64 - bar_x as f64) / (bar_w - 1) as f64).clamp(0.0, 1.0);
-                        self.change(r.key, r.lo + f * (r.hi - r.lo));
+                    if x >= bar_x && x < bar_x + bar_w {
+                        self.drag = Some((r.key, self.bar));
+                        self.change(r.key, slider_value(x, self.bar, r.lo, r.hi, r.step));
                     }
                 }
             }
+            Key::Wheel(_, y, direction) => {
+                let row = self.row_of.iter().find(|r| r.0 == y).map(|r| self.rows[r.1]).unwrap_or(row);
+                self.at = row.key;
+                self.change(row.key, self.value(row.key) + direction as f64 * row.step);
+            }
             Key::Quit => return false,
             Key::None => {}
+            _ => {}
         }
         true
     }
@@ -440,16 +521,29 @@ enum Key {
     Now,
     AllReal,
     Mouse(usize, usize),
+    Drag(usize, usize),
+    Release,
+    Wheel(usize, usize, i32),
+    Group(usize),
+    NextGroup,
+    PrevGroup,
+    Preview,
     Quit,
     None,
 }
 
 /// Turn what the terminal sent into keys. Escape sequences are read whole; a lone escape is ignored.
+#[cfg(test)]
 fn parse(bytes: &[u8]) -> Vec<Key> {
+    decode(bytes).0
+}
+
+fn decode(bytes: &[u8]) -> (Vec<Key>, usize) {
     let mut keys = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
+        if b == 0x1b && i + 1 == bytes.len() { break; }
         if b == 0x1b && i + 1 < bytes.len() && (bytes[i + 1] == b'[' || bytes[i + 1] == b'O') {
             let mut j = i + 2;
             while j < bytes.len() && !(0x40..=0x7e).contains(&bytes[j]) {
@@ -463,13 +557,16 @@ fn parse(bytes: &[u8]) -> Vec<Key> {
             keys.push(match (body, end) {
                 (b, 'M') | (b, 'm') if b.starts_with('<') => {
                     let p: Vec<usize> = b[1..].split(';').filter_map(|v| v.parse().ok()).collect();
-                    // a press or a drag with the left button; releases and the wheel are ignored
-                    if p.len() == 3 && end == 'M' && (p[0] & 0b11) == 0 && p[0] & 64 == 0 {
-                        Key::Mouse(p[1].saturating_sub(1), p[2].saturating_sub(1))
-                    } else {
-                        Key::None
+                    if p.len() != 3 { Key::None }
+                    else {
+                        let (x, y) = (p[1].saturating_sub(1), p[2].saturating_sub(1));
+                        if end == 'm' && p[0] & 3 == 0 { Key::Release }
+                        else if p[0] & 64 != 0 { Key::Wheel(x, y, if p[0] & 1 == 0 { 1 } else { -1 }) }
+                        else if p[0] & 3 == 0 { if p[0] & 32 != 0 { Key::Drag(x, y) } else { Key::Mouse(x, y) } }
+                        else { Key::None }
                     }
                 }
+                ("", 'Z') => Key::PrevGroup,
                 ("", 'A') => Key::Up,
                 ("", 'B') => Key::Down,
                 ("", 'C') => Key::Right,
@@ -490,7 +587,10 @@ fn parse(bytes: &[u8]) -> Vec<Key> {
         }
         keys.push(match b {
             b'k' => Key::Up,
-            b'j' | b'\t' => Key::Down,
+            b'j' => Key::Down,
+            b'\t' => Key::NextGroup,
+            b'1'..=b'5' => Key::Group((b - b'1') as usize),
+            b'p' => Key::Preview,
             b'h' => Key::Left,
             b'l' => Key::Right,
             b'[' | b'H' => Key::BigLeft,
@@ -503,7 +603,83 @@ fn parse(bytes: &[u8]) -> Vec<Key> {
         });
         i += 1;
     }
-    keys
+    (keys, i)
+}
+
+#[derive(Default)]
+struct Decoder { pending: Vec<u8> }
+impl Decoder {
+    fn feed(&mut self, bytes: &[u8]) -> Vec<Key> {
+        self.pending.extend_from_slice(bytes);
+        let (keys, used) = decode(&self.pending);
+        self.pending.drain(..used);
+        if self.pending.len() > 256 { self.pending.clear(); }
+        keys
+    }
+}
+
+fn slider_value(x: usize, bar: (usize, usize), lo: f64, hi: f64, step: f64) -> f64 {
+    let f = ((x as f64 - bar.0 as f64) / bar.1.saturating_sub(1).max(1) as f64).clamp(0.0, 1.0);
+    (((lo + f * (hi - lo)) / step).round() * step).clamp(lo, hi)
+}
+
+fn visible_range(selected: usize, count: usize, last: usize) -> (usize, usize) {
+    let count = count.max(1);
+    let first = selected.saturating_sub(count - 1).min(last.saturating_add(1).saturating_sub(count));
+    (first, (first + count).min(last + 1))
+}
+
+/// Only alter the dedicated panel terminal, never an unrelated terminal used with --here.
+struct Fade { address: Option<String>, faded: Option<bool> }
+impl Fade {
+    fn new() -> Self {
+        let mut ancestors = Vec::new();
+        let mut pid = std::process::id() as i64;
+        for _ in 0..12 {
+            ancestors.push(pid);
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{}/stat", pid)) else { break };
+            let Some(end) = stat.rfind(')') else { break };
+            pid = stat[end + 1..].split_whitespace().nth(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+            if pid <= 1 { break; }
+        }
+        let mut address = None;
+        for attempt in 0..3 {
+            address = sources::hyprland("j/clients").and_then(|v| {
+                v.as_array()?.iter().find(|c| c["class"].as_str() == Some("dev.dormer.panel") && ancestors.contains(&c["pid"].as_i64().unwrap_or(0)))?
+                    .get("address")?.as_str().map(str::to_string)
+            });
+            if address.is_some() { break; }
+            if attempt < 2 { std::thread::sleep(std::time::Duration::from_millis(30)); }
+        }
+        if let Some(a) = &address {
+            let window = format!("address:{}", a);
+            sources::run(&["hyprctl", "dispatch", "setfloating", &window], 0.5);
+            let size = sources::hyprland("j/monitors").and_then(|v| {
+                let m = v.as_array()?.iter().find(|m| m["focused"].as_bool() == Some(true))?;
+                let scale = m["scale"].as_f64().unwrap_or(1.0).max(0.1);
+                let (mut w, mut h) = (m["width"].as_f64()? / scale, m["height"].as_f64()? / scale);
+                if m["transform"].as_u64().unwrap_or(0) % 2 == 1 { std::mem::swap(&mut w, &mut h); }
+                Some((w as usize, h as usize))
+            }).unwrap_or((960, 600));
+            let (w, h) = (size.0.saturating_sub(48).min(620).max(1), size.1.saturating_sub(56).min(420).max(1));
+            sources::run(&["hyprctl", "dispatch", "resizewindowpixel", &format!("exact {} {},{}", w, h, window)], 0.5);
+            sources::run(&["hyprctl", "dispatch", "movewindowpixel", &format!("exact 24 28,{}", window)], 0.5);
+        }
+        Self { address, faded: None }
+    }
+    fn set(&mut self, faded: bool) {
+        if self.faded == Some(faded) { return; }
+        self.faded = Some(faded);
+        if let Some(address) = &self.address {
+            let window = format!("address:{}", address);
+            let alpha = if faded { "0.28" } else { "1.0" };
+            let current = sources::run(&["hyprctl", "dispatch", "setprop", &window, "opacity", alpha], 0.5);
+            if !current.is_some_and(|r| r.0 && r.1.trim() == "ok") {
+                sources::run(&["hyprctl", "dispatch", "setprop", &window, "alpha", &format!("{} override", alpha)], 0.5);
+            }
+            sources::run(&["hyprctl", "dispatch", "setprop", &window, "no_blur", if faded { "1" } else { "unset" }], 0.5);
+        }
+    }
 }
 
 fn term_size() -> (usize, usize) {
@@ -512,6 +688,38 @@ fn term_size() -> (usize, usize) {
         (ws.ws_row as usize, ws.ws_col as usize)
     } else {
         (24, 80)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_parser_distinguishes_drag_release_and_wheel() {
+        assert_eq!(parse(b"\x1b[<0;20;8M"), vec![Key::Mouse(19, 7)]);
+        assert_eq!(parse(b"\x1b[<32;24;8M"), vec![Key::Drag(23, 7)]);
+        assert_eq!(parse(b"\x1b[<0;24;8m"), vec![Key::Release]);
+        assert_eq!(parse(b"\x1b[<64;24;8M"), vec![Key::Wheel(23, 7, 1)]);
+        assert_eq!(parse(b"\x1b[<65;24;8M"), vec![Key::Wheel(23, 7, -1)]);
+        assert_eq!(parse(b"2\t\x1b[Zp"), vec![Key::Group(1), Key::NextGroup, Key::PrevGroup, Key::Preview]);
+    }
+
+    #[test]
+    fn partial_escape_sequences_survive_terminal_reads() {
+        let mut decoder = Decoder::default();
+        assert!(decoder.feed(b"\x1b[<0;2").is_empty());
+        assert_eq!(decoder.feed(b"0;8M\x1b["), vec![Key::Mouse(19, 7)]);
+        assert_eq!(decoder.feed(b"C"), vec![Key::Right]);
+    }
+
+    #[test]
+    fn controls_fit_small_terminals_and_drag_values_are_clamped() {
+        assert_eq!(slider_value(0, (19, 20), 0.0, 100.0, 5.0), 0.0);
+        assert_eq!(slider_value(100, (19, 20), 0.0, 100.0, 5.0), 100.0);
+        assert_eq!(slider_value(29, (19, 21), 0.0, 100.0, 5.0), 50.0);
+        assert_eq!(visible_range(14, 3, 19), (12, 15));
+        assert_eq!(visible_range(0, 3, 2), (0, 3));
     }
 }
 
@@ -532,10 +740,10 @@ fn hyprland(lua: &str, classic: &[&str]) {
 fn terminal(exe: &str, back: Option<&str>) -> Option<Vec<String>> {
     let (name, title) = ("dev.dormer.panel", "dormer dev");
     let known: [(&str, Vec<String>); 5] = [
-        ("ghostty", vec![format!("--class={}", name), format!("--title={}", title), "--window-width=66".into(), "--window-height=43".into(), "--font-size=10".into(), "--confirm-close-surface=false".into(), "-e".into()]),
-        ("kitty", vec!["--class".into(), name.into(), "--title".into(), title.into(), "-o".into(), "initial_window_width=66c".into(), "-o".into(), "initial_window_height=43c".into()]),
-        ("foot", vec!["--app-id".into(), name.into(), "--title".into(), title.into(), "--window-size-chars=66x43".into()]),
-        ("alacritty", vec!["--class".into(), name.into(), "--title".into(), title.into(), "-o".into(), "window.dimensions.columns=66".into(), "-o".into(), "window.dimensions.lines=43".into(), "-e".into()]),
+        ("ghostty", vec![format!("--class={}", name), format!("--title={}", title), "--window-width=70".into(), "--window-height=24".into(), "--font-size=10".into(), "--background-opacity=0.72".into(), "--gtk-single-instance=false".into(), "--confirm-close-surface=false".into(), "-e".into()]),
+        ("kitty", vec!["--class".into(), name.into(), "--title".into(), title.into(), "-o".into(), "initial_window_width=70c".into(), "-o".into(), "initial_window_height=24c".into()]),
+        ("foot", vec!["--app-id".into(), name.into(), "--title".into(), title.into(), "--window-size-chars=70x24".into()]),
+        ("alacritty", vec!["--class".into(), name.into(), "--title".into(), title.into(), "-o".into(), "window.dimensions.columns=70".into(), "-o".into(), "window.dimensions.lines=24".into(), "-e".into()]),
         ("wezterm", vec!["start".into(), "--class".into(), name.into(), "--".into()]),
     ];
     let env = std::env::var("TERMINAL").unwrap_or_default();
@@ -603,13 +811,21 @@ pub fn run(here: bool, back: Option<String>) -> i32 {
     let mut panel = Panel::new();
     panel.commit();
     let mut stdin = std::io::stdin();
+    let mut decoder = Decoder::default();
+    let mut dirty = true;
+    let mut was_peeking = false;
     'outer: loop {
         if tm::now() - panel.real_at > 20.0 {
             panel.refresh_real(); // the real clock and weather move on underneath
+            dirty = true;
         }
-        panel.paint(&mut out);
+        dirty |= panel.publish();
+        let peeking = panel.preview || panel.drag.is_some() || tm::mono() < panel.peek_until;
+        if peeking != was_peeking { dirty = true; was_peeking = peeking; }
+        if dirty { panel.paint(&mut out); dirty = false; }
         let mut fds = [libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 }];
-        if unsafe { libc::poll(fds.as_mut_ptr(), 1, 250) } <= 0 {
+        let wait = if panel.pending { 34 } else if peeking && !panel.preview && panel.drag.is_none() { 100 } else { 1000 };
+        if unsafe { libc::poll(fds.as_mut_ptr(), 1, wait) } <= 0 {
             continue;
         }
         if fds[0].revents & (libc::POLLHUP | libc::POLLERR) != 0 {
@@ -620,12 +836,14 @@ pub fn run(here: bool, back: Option<String>) -> i32 {
         if n == 0 {
             break;
         }
-        for k in parse(&raw[..n]) {
+        for k in decoder.feed(&raw[..n]) {
             if !panel.key(k) {
                 break 'outer;
             }
+            if k != Key::None { dirty = true; }
         }
     }
+    panel.fade.set(false);
     let _ = out.write_all(b"\x1b[?1006l\x1b[?1002l\x1b[?25h\x1b[?1049l");
     let _ = out.flush();
     unsafe { libc::tcsetattr(0, libc::TCSANOW, &saved) };

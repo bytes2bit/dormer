@@ -592,10 +592,11 @@ fn cmd_view(args: &Args) -> Result<i32, String> {
 
 /// The command that runs this dormer: what units and the dev panel should call.
 pub fn launcher() -> String {
-    if let Some(p) = sources::which("dormer") {
-        return p.to_string_lossy().into_owned();
-    }
-    std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "dormer".into())
+    launcher_from(std::env::current_exe().ok(), sources::which("dormer"))
+}
+
+fn launcher_from(current: Option<std::path::PathBuf>, installed: Option<std::path::PathBuf>) -> String {
+    current.or(installed).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "dormer".into())
 }
 
 const UNITS: [(&str, &str); 3] = [
@@ -891,5 +892,14 @@ fn main() {
             eprintln!("dormer: {}", e);
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    #[test]
+    fn panel_launches_the_running_build_before_an_older_installed_copy() {
+        assert_eq!(super::launcher_from(Some("/tmp/dormer-new".into()), Some("/tmp/dormer-old".into())), "/tmp/dormer-new");
+        assert_eq!(super::launcher_from(None, Some("/tmp/dormer-old".into())), "/tmp/dormer-old");
     }
 }

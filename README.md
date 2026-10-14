@@ -71,6 +71,25 @@ Coordinates use the 1600x1000 design space. `--seconds` sets how far the
 simulation runs after the click. PNG exports still read your config and weather
 sources; see `AGENTS.md` for an isolated, offline preview setup.
 
+## Scene controls
+
+`dormer dev` opens a compact panel over the wallpaper. Click a view name, then
+choose Time, Weather, Machine, Motion, or Scene. Tab moves between groups;
+the number keys select them directly. Arrow keys select and adjust a control,
+the mouse wheel changes its value, and sliders can be clicked or dragged.
+Shift-arrow or Page Up/Down takes larger steps.
+
+While adjusting, the dedicated panel fades and shows just the selected slider,
+leaving the scene in view. It returns when you release the slider or stop
+pressing adjustment keys. Press `p` to keep the compact preview open. On
+Hyprland the dedicated panel floats and fades; Ghostty also has a translucent
+background. `dev --here` uses the current terminal's own opacity settings.
+
+The mark on a slider shows its real value, and amber marks a held override.
+`r` resets one control, `a` resets all, `n` restores the current time/date,
+and `q` closes the panel and restores reality. Changes are temporary and
+updates are combined while dragging; they are not saved to your config.
+
 ## What the sky is telling you
 
 This is the sky of `rooftops`, `street`, `city`, `coast` and `vale`. The moon has none of
