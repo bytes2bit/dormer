@@ -334,7 +334,7 @@ impl Panel {
         let peek = self.preview || tm::mono() < self.peek_until || self.drag.is_some();
         self.fade.set(peek);
         let mut s = String::from("\x1b[H\x1b[2J");
-        let (accent, dim, bold, off) = ("\x1b[33m", "\x1b[90m", "\x1b[1m", "\x1b[0m");
+        let (accent, dim, bold, off) = ("\x1b[33m", "\x1b[38;5;250m", "\x1b[1m", "\x1b[0m");
         let mut put = |y: usize, x: usize, text: &str, style: &str| {
             if y + 1 < rows_n.max(1) && x + 1 < cols {
                 let cut: String = text.chars().take(cols - 1 - x).collect();
@@ -626,7 +626,7 @@ fn visible_range(selected: usize, count: usize, last: usize) -> (usize, usize) {
 }
 
 /// Only alter the dedicated panel terminal, never an unrelated terminal used with --here.
-struct Fade { address: Option<String>, faded: Option<bool> }
+struct Fade { address: Option<String>, faded: Option<bool>, size: (usize, usize) }
 impl Fade {
     fn new() -> Self {
         let mut ancestors = Vec::new();
@@ -647,6 +647,7 @@ impl Fade {
             if address.is_some() { break; }
             if attempt < 2 { std::thread::sleep(std::time::Duration::from_millis(30)); }
         }
+        let mut panel_size = (620, 420);
         if let Some(a) = &address {
             let window = format!("address:{}", a);
             sources::run(&["hyprctl", "dispatch", "setfloating", &window], 0.5);
@@ -658,22 +659,25 @@ impl Fade {
                 Some((w as usize, h as usize))
             }).unwrap_or((960, 600));
             let (w, h) = (size.0.saturating_sub(48).min(620).max(1), size.1.saturating_sub(56).min(420).max(1));
+            panel_size = (w, h);
             sources::run(&["hyprctl", "dispatch", "resizewindowpixel", &format!("exact {} {},{}", w, h, window)], 0.5);
             sources::run(&["hyprctl", "dispatch", "movewindowpixel", &format!("exact 24 28,{}", window)], 0.5);
         }
-        Self { address, faded: None }
+        Self { address, faded: None, size: panel_size }
     }
     fn set(&mut self, faded: bool) {
         if self.faded == Some(faded) { return; }
         self.faded = Some(faded);
         if let Some(address) = &self.address {
             let window = format!("address:{}", address);
-            let alpha = if faded { "0.28" } else { "1.0" };
+            let alpha = if faded { "0.46" } else { "1.0" };
             let current = sources::run(&["hyprctl", "dispatch", "setprop", &window, "opacity", alpha], 0.5);
             if !current.is_some_and(|r| r.0 && r.1.trim() == "ok") {
                 sources::run(&["hyprctl", "dispatch", "setprop", &window, "alpha", &format!("{} override", alpha)], 0.5);
             }
             sources::run(&["hyprctl", "dispatch", "setprop", &window, "no_blur", if faded { "1" } else { "unset" }], 0.5);
+            let height = if faded { self.size.1.min(140) } else { self.size.1 };
+            sources::run(&["hyprctl", "dispatch", "resizewindowpixel", &format!("exact {} {},{}", self.size.0, height, window)], 0.5);
         }
     }
 }
@@ -736,7 +740,7 @@ fn hyprland(lua: &str, classic: &[&str]) {
 fn terminal(exe: &str, back: Option<&str>) -> Option<Vec<String>> {
     let (name, title) = ("dev.dormer.panel", "dormer dev");
     let known: [(&str, Vec<String>); 5] = [
-        ("ghostty", vec![format!("--class={}", name), format!("--title={}", title), "--window-width=70".into(), "--window-height=24".into(), "--font-size=10".into(), "--background-opacity=0.72".into(), "--gtk-single-instance=false".into(), "--confirm-close-surface=false".into(), "-e".into()]),
+        ("ghostty", vec![format!("--class={}", name), format!("--title={}", title), "--window-width=70".into(), "--window-height=24".into(), "--font-size=10".into(), "--background-opacity=0.72".into(), "--resize-overlay=never".into(), "--gtk-single-instance=false".into(), "--confirm-close-surface=false".into(), "-e".into()]),
         ("kitty", vec!["--class".into(), name.into(), "--title".into(), title.into(), "-o".into(), "initial_window_width=70c".into(), "-o".into(), "initial_window_height=24c".into()]),
         ("foot", vec!["--app-id".into(), name.into(), "--title".into(), title.into(), "--window-size-chars=70x24".into()]),
         ("alacritty", vec!["--class".into(), name.into(), "--title".into(), title.into(), "-o".into(), "window.dimensions.columns=70".into(), "-o".into(), "window.dimensions.lines=24".into(), "-e".into()]),
@@ -810,12 +814,15 @@ pub fn run(here: bool, back: Option<String>) -> i32 {
     let mut decoder = Decoder::default();
     let mut dirty = true;
     let mut was_peeking = false;
+    let mut last_size = term_size();
     'outer: loop {
         if tm::now() - panel.real_at > 20.0 {
             panel.refresh_real(); // the real clock and weather move on underneath
             dirty = true;
         }
         dirty |= panel.publish();
+        let size = term_size();
+        if size != last_size { last_size = size; dirty = true; }
         let peeking = panel.preview || panel.drag.is_some() || tm::mono() < panel.peek_until;
         if peeking != was_peeking { dirty = true; was_peeking = peeking; }
         if dirty { panel.paint(&mut out); dirty = false; }

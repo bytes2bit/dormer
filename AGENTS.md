@@ -5,7 +5,8 @@
 dormer is a small native Linux/Wayland program that paints a living wallpaper:
 a familiar place under the real sky, informed by local time, weather, the week,
 and activity on the user's machine. It produces both PNG stills for a wallpaper
-daemon and an animated, click-through background layer for each monitor.
+daemon and an animated background layer for each monitor. Live mode accepts
+mouse input by default; `[live] interactive = false` restores click-through.
 
 The active implementation is the Rust 2021 binary in `src/`, versioned through
 `Cargo.toml`. It uses a custom CPU renderer and direct Wayland client protocols;
@@ -44,6 +45,9 @@ with the README and `dormer explain`.
 | `src/views/kit.rs` | Shared building tables, skyline masks, window schedules, painting and terrain helpers. |
 | `src/views/globe.rs` | Hand-drawn Earth geography and globe rendering for the moon view; flat chart export. |
 | `src/live.rs` | `World` simulation, particles and anchor effects, moving drawing, damage coalescing. |
+| `src/interaction.rs` | Per-monitor hit testing, settled hover feedback and fixed-capacity finite reactions; preview coordinates. |
+| `src/pointer.rs` | Seat/pointer focus and cursor resources, including the software cursor fallback. |
+| `src/buffer.rs` | Pixel-exact stale/damage restoration and visibility/resume decisions. |
 | `src/wl.rs` | Per-monitor Wayland surfaces, shared-memory double buffers, scaling, crossfades, visibility/power pacing, signals and file watches; headless `one_frame`. |
 | `src/dev.rs` | Terminal slider panel; transient time/weather/machine/view overrides. |
 | `src/words.rs` | `dormer explain`: shared sky descriptions plus each view's words. |
@@ -76,6 +80,9 @@ and masks for a screen size, determines window lights, and paints:
 - `indoors` / `indoors_alive`: objects on the viewer's side of the glass,
   drawn after weather. The live hook's `falling` flag tells it to restore
   foreground objects that rain or snow has just overpainted.
+- `targets`: interactive objects/regions, ordered far to near in design
+  coordinates. Use existing geometry, transformed layouts and presence/weather
+  conditions. Targets carry an action, color and optional occlusion layer.
 
 The still pass paints shared sky/stars/sun/moon, `heavens`, clouds, still sky
 visitors, `ground`, still weather, `indoors`, then bloom. `Sky::Void` bypasses
@@ -113,6 +120,8 @@ Read `coast.rs` for hand-drawn terrain, `downtown.rs`/`kit.rs` for buildings,
   buffer restores previous damage from the still image before drawing again;
   missing damage causes trails, oversized damage wastes CPU. Preserve
   `live::coalesce` behavior instead of bounding all scattered effects together.
+  `Frame.full_damage` skips per-shape bookkeeping only when the caller reports
+  full-buffer damage itself. Never suppress damage without that guarantee.
 - **Low idle cost:** live still frames normally rebuild every 20 seconds;
   animation pacing adapts to activity and precipitation. Preserve frame
   callbacks, buffer ownership, hidden-screen suppression and resume behavior.
@@ -140,6 +149,22 @@ Config settings cover place, look, wallpaper, weather, house, live FPS, power
 hold file, and dev terminal. Missing settings fall back to defaults. Invalid
 TOML currently falls back to a default table. See `sources::config` for actual
 behavior and keep `config.example.toml` in sync when adding settings.
+
+Pointer events are native Wayland seat events on exposed wallpaper surfaces;
+there is no global mouse polling or keyboard capture. `Screen` owns its
+interaction state. Convert logical pointer coordinates through the actual
+logical/buffer dimensions and `Layout.back`; do not assume integer scale.
+Click reactions are limited to eight/96 particles per screen and a 120 ms
+cooldown. Hover settles; paused/covered/sleeping outputs ignore new input.
+Maintain immediate stale-output rebuild on wake independently of the global
+scene age, and preserve crossfades for visible view changes.
+
+The dev panel groups controls into Time/Weather/Machine/Motion/Scene, accepts
+incrementally decoded keyboard/SGR mouse events, and locks a dragged slider
+until release. It batches parameter writes at most 30 times per second. On
+Hyprland its own terminal floats, shrinks and fades during adjustment, with
+blur disabled for the preview; `--here` preserves the host terminal's opacity.
+The still-painter worker sleeps on a bounded channel instead of idle polling.
 
 Weather `auto` tries Noctalia's cached reading/location, then Open-Meteo via
 `curl` if it has a location and no usable reading. Explicit place coordinates
@@ -174,7 +199,10 @@ cargo build --release --locked
 
 Add `--offline` when dependencies are already cached. Use the release binary
 for rendering/performance checks. There is no checked-in CI, separate
-integration-test suite, or repository-specific rustfmt configuration.
+Rust integration-test suite, or repository-specific rustfmt configuration.
+The optional `python3 tests/dev_panel.py` check drives a real PTY using isolated
+offline state and a harmless `true` wallpaper command. It covers fragmented
+input, dragging, first adjustment, preview, reset, idle wakeups and cleanup.
 
 Unit tests cover Python RNG parity, the seed-12 town fingerprint, household
 schedules, Tangier astronomy, sky-projection round trips and damage merging.
