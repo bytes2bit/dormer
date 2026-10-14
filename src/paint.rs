@@ -106,6 +106,7 @@ pub fn render(sc: &mut Scene, cache: &Cache) -> (Canvas, Anchors) {
         if !sc.live && home {
             weather(&mut d, &cx);
         }
+        cache.stage.indoors(&mut d, sc, &mut bloom, &mut out);
     }
     bloom.apply(&mut cv, ((2.0 * lay.u).round() as usize).max(1));
     lap("bloom");

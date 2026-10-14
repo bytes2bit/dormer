@@ -806,6 +806,11 @@ impl World {
                 d.path(&pts, 2.0 * u, [238.0, 242.0, 252.0], 0.95);
             }
         }
+        if snug {
+            // whatever the view keeps indoors is nearer than all of that
+            d.s.behind = None;
+            cache.stage.indoors_alive(d, sc, t, now, !self.drops.is_empty() || !self.flakes.is_empty());
+        }
     }
 }
 

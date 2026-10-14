@@ -37,7 +37,7 @@ const USAGE: &str = "dormer — a window in the roof: the same rooftops under th
     dormer tour                 play the whole of today in about a minute
     dormer pretend snow         borrow some weather for ten minutes
     dormer live                 run the living wallpaper (birds, rain, shooting stars)
-    dormer view moon            look out somewhere else: rooftops | city | coast | moon | vale
+    dormer view moon            look out somewhere else: rooftops | street | city | coast | moon | vale
     dormer dev                  open the slider panel and bend the scene by hand
     dormer install              start on login, keep the still wallpaper up to date
     dormer doctor               show what dormer found on this machine

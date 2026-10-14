@@ -8,17 +8,18 @@ at this moment, and keeps it alive on your desktop: the sun and moon where they
 really are, tonight's real stars and planets, the weather outside, the rhythm
 of the week, and a few signals from your own machine.
 
-![The five views](docs/views.jpg)
+![The six views](docs/views.jpg)
 
-## Five views
+## Six views
 
-Three of them are places under your own sky, one is a valley in another world
+Four of them are places under your own sky, one is a valley in another world
 under that same sky, and one is on the moon, where the sky is the earth's to
 fill:
 
 | | |
 | --- | --- |
 | `rooftops` | The old town from a window in the roof: painted walls, tiled roofs, a clock tower, a domed hall. |
+| `street` | A block of walk-ups across a narrow street, from your own windowsill: fire escapes and water tanks, a diner, a bodega, cabs, people going by. The view for being indoors. |
 | `city` | The middle of town across a railway viaduct: towers placed by hand, offices that keep office hours, trains to a timetable. |
 | `coast` | A headland and its lighthouse over the strait: the sea mirrors the sky, and the tide follows the moon. |
 | `moon` | A station on the Lake of Dreams. The earth hangs overhead with its true face and phase; the sun is up for a fortnight and down for a fortnight. |
@@ -26,24 +27,24 @@ fill:
 
 ```sh
 dormer view            # list them
-dormer view moon       # look out there from now on; the wallpaper fades over
+dormer view street     # look out there from now on; the wallpaper fades over
 dormer view default    # back to what the config says
 ```
 
 Your machine shows in the same four ways everywhere, staged for the place:
 
-| | rooftops | city | coast | moon | vale |
-| --- | --- | --- | --- | --- | --- |
-| An AI coding agent is running | the lamp in the roof room | the lantern on the tallest tower | the lamp in the keeper's window | the lamp in the cupola | the lamp in the tower's top room |
-| Each running Docker container | a blue window under it | a blue floor under it | a blue lantern on a moored boat | a cargo pod lit blue | a rune lit blue on a standing stone |
-| The processor is working hard | smoke from its stovepipe | steam off the tower's roof | smoke from the lean-to's stovepipe | the vent blowing, the radiators glowing | violet smoke from the flue |
-| Sound is playing | notes drift from it | notes drift from it | notes drift from it | notes drift from it | notes drift from it |
+| | rooftops | street | city | coast | moon | vale |
+| --- | --- | --- | --- | --- | --- | --- |
+| An AI coding agent is running | the lamp in the roof room | the neighbour across the way at their desk, working by the lamp | the lantern on the tallest tower | the lamp in the keeper's window | the lamp in the cupola | the lamp in the tower's top room |
+| Each running Docker container | a blue window under it | a blue jar lit on their fire escape | a blue floor under it | a blue lantern on a moored boat | a cargo pod lit blue | a rune lit blue on a standing stone |
+| The processor is working hard | smoke from its stovepipe | steam from a manhole in the road | steam off the tower's roof | smoke from the lean-to's stovepipe | the vent blowing, the radiators glowing | violet smoke from the flue |
+| Sound is playing | notes drift from it | the neighbour picks up the guitar; notes drift from their window | notes drift from it | notes drift from it | notes drift from it |
 
 The lamp burns low and red when the battery is nearly flat.
 
 ## What the sky is telling you
 
-This is the sky of `rooftops`, `city`, `coast` and `vale`. The moon has none of
+This is the sky of `rooftops`, `street`, `city`, `coast` and `vale`. The moon has none of
 it: see its own rows further down.
 
 | You see | It means |
@@ -66,6 +67,15 @@ And in each view, a few things of its own:
 | --- | --- | --- |
 | rooftops | The clock tower | The real time. On the hour the birds on it take off. |
 | | String lights on a roof | Friday and Saturday night, and every night in late December. Fireworks at New Year. |
+| street | The glass | You are indoors: the rain falls beyond your sill, beads soft and out of focus on the pane and runs down it, and on a cold or wet day the bottom of the glass mists over. |
+| | The sun | It comes up behind the low diner on the left, and goes down at the far end of the cross street, every day. For the last hour its light runs gold down that street, across yours and in at your window, where what stands on the sill throws long shadows. |
+| | The neighbour | At the desk while an agent works, playing the guitar while sound plays. Otherwise their own day: coffee at the window, out at work, reading, a film in the evening, asleep. |
+| | The shops | Their hours: the diner six till one, the laundromat seven till eleven, the bookshop ten till nine (a lamp left on in the window after), pizza till three, the bar from five, the bodega always. |
+| | Cabs, cars, the bus, a courier | As busy as the hour and the day: the rush, a quiet Sunday, a lone cab at four. The bus every ten minutes on a working day, none between half past one and five. |
+| | People walking by | The same: dogs walked morning and evening, a runner at dawn, umbrellas when it rains, someone ducking into the bodega. |
+| | The road shining, puddles | Rain now; puddles linger when the air is damp. The lights lie in the wet road. |
+| | The traffic light | It changes every minute or so; the hand blinks before the little man comes on. |
+| | The cat | Along the roofs and fire escapes when it is dry, on your sill watching when it rains, asleep there at night. |
 | city | The station clock | The real time. |
 | | A train on the viaduct | The timetable: every three minutes at the rush on a working day, every nine at the weekend, none between half past midnight and five. |
 | | The light on the old exchange's mast | A weather beacon. Steady blue: fair ahead. Flashing blue: cloud about. Red: rain now or on the way. |
@@ -117,7 +127,7 @@ not running. `dormer install --no-live` keeps only the still frames.
 
 | | |
 | --- | --- |
-| `dormer view city` | Look out somewhere else: `rooftops`, `city` or `coast`. |
+| `dormer view street` | Look out somewhere else: `dormer view` lists them. |
 | `dormer explain` | Describe the scene in words. Takes `--at`, `--weather` and `--view`. |
 | `dormer tour` | Play today from midnight to midnight, smoothly, in about a minute. |
 | `dormer pretend snow` | Borrow some weather for ten minutes. |
@@ -135,12 +145,16 @@ Measured on a 1920x1200 laptop screen (Core Ultra 5):
 | --- | --- |
 | Painting one still frame, any view | 15 to 17 ms (about 21 ms with the final pass), once every twenty seconds |
 | Living wallpaper, a calm scene in view | 0.6 to 1.5% of one core |
+| The `street` view in view, with its traffic always about | about 3% of one core |
 | Rain or snow in view | about 7% of one core: the whole screen changes every frame |
-| Wallpaper covered by a tiled or fullscreen window | nothing |
+| Wallpaper covered by a tiled or fullscreen window, or by floating ones that fill the screen | nothing |
+| Screen off or asleep, but not locked | nothing |
 | Memory | about 35 MB |
 
 Only the rectangles the moving things touch are repainted and reported to the
 compositor. Under Hyprland it stops the moment a window covers the workspace.
+On any compositor it stops when the screen stops showing frames, and it does not
+keep a hidden picture up to date: it paints the present moment as it comes back.
 
 ## Configuration
 
@@ -186,8 +200,10 @@ for it, and may add something of its own behind the clouds in `heavens` (the
 little moon in `vale.rs`). A view that returns `Sky::Void` from `sky` gets
 nothing overhead and no weather, birds or planes: it paints the whole sky
 itself (`moonbase.rs`), with the painter's star field and Milky Way there to
-call. `Layout::scaled` and `Layout::moved` resize or slide one part of a view
-without rewriting its numbers. `dormer globe --out map.png` writes the earth's
+call. Whatever a view paints in `indoors` is nearer than the weather: the
+rain falls behind it (the sill in `street.rs`). `Layout::scaled` and
+`Layout::moved` resize or slide one part of a view without rewriting its
+numbers. `dormer globe --out map.png` writes the earth's
 coastlines out flat, for checking them.
 
 Setting `DORMER_TIME` prints how long each stage of a still frame took;

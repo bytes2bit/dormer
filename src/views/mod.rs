@@ -26,6 +26,7 @@ pub mod globe;
 pub mod kit;
 pub mod moonbase;
 pub mod rooftops;
+pub mod street;
 pub mod vale;
 
 use crate::color::Rgb;
@@ -159,6 +160,14 @@ pub trait Stage {
     fn lively(&self, _sc: &Scene, _now: f64) -> bool {
         false
     }
+
+    /// Paint what is on our side of the glass: nearer than the weather, which falls behind it.
+    /// The still painter calls this last of all, after the rain and snow.
+    fn indoors(&self, _d: &mut Draw<Canvas>, _sc: &Scene, _bloom: &mut Bloom, _out: &mut Anchors) {}
+
+    /// The same for the live layer, every frame, after everything else. `falling` says rain or
+    /// snow has just been drawn over the whole picture, so whatever is indoors must be put back.
+    fn indoors_alive(&self, _d: &mut Draw<Frame>, _sc: &Scene, _t: f32, _now: f64, _falling: bool) {}
 }
 
 pub trait View: Sync {
@@ -192,7 +201,7 @@ pub trait View: Sync {
     fn words(&self, sc: &Scene) -> Vec<(&'static str, String)>;
 }
 
-pub static ALL: [&dyn View; 5] = [&rooftops::Rooftops, &downtown::Downtown, &coast::Coast, &moonbase::Moonbase, &vale::Vale];
+pub static ALL: [&dyn View; 6] = [&rooftops::Rooftops, &street::Street, &downtown::Downtown, &coast::Coast, &moonbase::Moonbase, &vale::Vale];
 
 pub fn find(id: &str) -> Option<&'static dyn View> {
     ALL.iter().copied().find(|v| v.id() == id)

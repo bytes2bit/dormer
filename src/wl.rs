@@ -7,8 +7,12 @@
 //! night costs the compositor a few hundred pixels a frame.
 //!
 //! It moves only while it can be seen. With a tiled or fullscreen window on
-//! the workspace (Hyprland), after `dormer hold on`, or while the configured
-//! hold file exists, it stands still and costs nothing.
+//! the workspace, or floating ones that fill the screen (Hyprland), after
+//! `dormer hold on`, or while the configured hold file exists, it stands still
+//! and costs nothing. The same goes for a screen that has stopped showing
+//! frames (switched off, asleep): the compositor stops asking for the next one,
+//! and nothing is drawn or worked out until it does. A hidden screen's still
+//! frame is not kept up to date either; it is painted afresh as it comes back.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -124,6 +128,10 @@ struct Screen {
     last_dirty: Vec<Rect>,
     /// can the wallpaper be seen on this monitor
     open: bool,
+    /// when the last frame was handed over
+    sent: f64,
+    /// the compositor has not shown that frame for a while: the screen is off or asleep
+    dark: bool,
 }
 
 impl Screen {
@@ -160,6 +168,10 @@ struct App {
     bent: bool,
     held: bool,
     saver: bool,
+    /// a dark screen has just started showing frames again
+    woke: bool,
+    /// a monitor has said its name, so whether it is covered can be looked up
+    named: bool,
     quit: bool,
     next_base: f64,
     last_tick: f64,
@@ -193,6 +205,8 @@ impl App {
             waiting: false,
             last_dirty: Vec::new(),
             open: true,
+            sent: 0.0,
+            dark: false,
         });
     }
 
@@ -272,7 +286,12 @@ impl App {
     }
 
     fn moving(&self, s: &Screen) -> bool {
-        !self.held && !self.saver && (s.open || self.probe)
+        !self.held && !self.saver && ((s.open && !s.dark) || self.probe)
+    }
+
+    /// Could anyone see a change to this screen's still frame?
+    fn seen(&self, s: &Screen) -> bool {
+        self.probe || (s.open && !s.dark)
     }
 
     /// Work the scene out afresh and paint the still frame for every screen.
@@ -336,7 +355,10 @@ impl App {
         // a still frame, and now and then a whole view, has just come and gone: hand the memory back
         unsafe { libc::malloc_trim(0) };
         let any_moving = self.screens.iter().any(|s| self.moving(s));
-        self.next_base = mono + if self.held || self.saver { 900.0 } else if any_moving { 20.0 } else { 120.0 };
+        // the sky moves on every quarter hour under a still wallpaper; nobody needs it moved while it is hidden,
+        // because it is painted afresh as it comes back into view
+        let any_seen = self.screens.iter().any(|s| self.seen(s));
+        self.next_base = mono + if any_moving { 20.0 } else if any_seen { 900.0 } else { 3600.0 };
     }
 
     /// Paint one frame for one screen and hand it to the compositor.
@@ -414,13 +436,14 @@ impl App {
         s.surface.commit();
         buf.busy = true;
         s.waiting = true;
+        s.sent = mono;
     }
 
     /// Frames a second worth drawing right now; 0 when nothing on any screen should move.
     fn pace(&self) -> f64 {
         let Some(sc) = self.scene.as_ref() else { return 0.0 };
         if !self.screens.iter().any(|s| self.moving(s) && s.pool.is_some()) {
-            return if self.screens.iter().any(|s| s.fade.is_some()) { 20.0 } else { 0.0 };
+            return if self.screens.iter().any(|s| s.fade.is_some() && !s.dark) { 20.0 } else { 0.0 };
         }
         let fps = config().fps as f64;
         if self.world.everywhere() {
@@ -485,7 +508,10 @@ impl Dispatch<wl_output::WlOutput, u32> for App {
         let Some(i) = app.screen(*id) else { return };
         match event {
             wl_output::Event::Scale { factor } => app.screens[i].whole_scale = factor,
-            wl_output::Event::Name { name } => app.screens[i].name = name,
+            wl_output::Event::Name { name } => {
+                app.screens[i].name = name;
+                app.named = true;
+            }
             wl_output::Event::Done => app.resize(i),
             _ => {}
         }
@@ -537,7 +563,12 @@ impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, u32> for App {
 impl Dispatch<wl_callback::WlCallback, u32> for App {
     fn event(app: &mut Self, _: &wl_callback::WlCallback, event: wl_callback::Event, id: &u32, _: &Connection, _: &QueueHandle<Self>) {
         if let (Some(i), wl_callback::Event::Done { .. }) = (app.screen(*id), event) {
-            app.screens[i].waiting = false;
+            let s = &mut app.screens[i];
+            s.waiting = false;
+            if s.dark {
+                s.dark = false;
+                app.woke = true;
+            }
         }
     }
 }
@@ -579,7 +610,8 @@ impl Hypr {
         Hypr { dir, events }
     }
 
-    /// For each monitor: is the wallpaper in view (no tiled or fullscreen window over it)?
+    /// For each monitor: is the wallpaper in view? Not under a tiled or fullscreen window, nor under
+    /// floating ones that between them leave next to nothing of it showing.
     fn look(&self) -> Option<HashMap<String, bool>> {
         self.dir.as_ref()?;
         let (monitors, clients) = (sources::hyprland("j/monitors")?, sources::hyprland("j/clients")?);
@@ -590,16 +622,49 @@ impl Hypr {
                 Some(id) if id != 0 => shown.push(id),
                 _ => {}
             }
-            let covered = clients.as_array()?.iter().any(|c| {
-                shown.contains(&c["workspace"]["id"].as_i64().unwrap_or(i64::MAX))
-                    && c["mapped"].as_bool().unwrap_or(true)
-                    && !c["hidden"].as_bool().unwrap_or(false)
-                    && (!c["floating"].as_bool().unwrap_or(false) || c["fullscreen"].as_i64().unwrap_or(0) != 0 || c["fullscreen"].as_bool().unwrap_or(false))
-            });
+            let here: Vec<&serde_json::Value> = clients
+                .as_array()?
+                .iter()
+                .filter(|c| shown.contains(&c["workspace"]["id"].as_i64().unwrap_or(i64::MAX)) && c["mapped"].as_bool().unwrap_or(true) && !c["hidden"].as_bool().unwrap_or(false))
+                .collect();
+            let fullscreen = |c: &serde_json::Value| c["fullscreen"].as_i64().unwrap_or(0) != 0 || c["fullscreen"].as_bool().unwrap_or(false);
+            let covered = here.iter().any(|c| !c["floating"].as_bool().unwrap_or(false) || fullscreen(c)) || buried(m, &here);
             open.insert(m["name"].as_str().unwrap_or("").to_string(), !covered);
         }
         Some(open)
     }
+}
+
+/// Do these floating windows hide nearly all of this monitor, outside its bars? Measured on a coarse grid.
+fn buried(m: &serde_json::Value, windows: &[&serde_json::Value]) -> bool {
+    const N: usize = 40;
+    let num = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0);
+    let scale = num(&m["scale"]).max(0.1);
+    // the monitor in the same layout coordinates as the windows; a quarter turn swaps its sides
+    let (mut w, mut h) = (num(&m["width"]) / scale, num(&m["height"]) / scale);
+    if m["transform"].as_i64().unwrap_or(0) % 2 == 1 {
+        std::mem::swap(&mut w, &mut h);
+    }
+    // leave out what the bars keep for themselves: they hide the wallpaper anyway
+    let gap = |k: usize| num(&m["reserved"][k]);
+    let (x0, y0) = (num(&m["x"]) + gap(0), num(&m["y"]) + gap(1));
+    let (w, h) = (w - gap(0) - gap(2), h - gap(1) - gap(3));
+    if w < 1.0 || h < 1.0 || windows.is_empty() {
+        return false;
+    }
+    let mut hidden = 0;
+    for gy in 0..N {
+        for gx in 0..N {
+            let (x, y) = (x0 + (gx as f64 + 0.5) * w / N as f64, y0 + (gy as f64 + 0.5) * h / N as f64);
+            if windows.iter().any(|c| {
+                let (cx, cy, cw, ch) = (num(&c["at"][0]), num(&c["at"][1]), num(&c["size"][0]), num(&c["size"][1]));
+                cx <= x && x < cx + cw && cy <= y && y < cy + ch
+            }) {
+                hidden += 1;
+            }
+        }
+    }
+    hidden * 100 >= N * N * 96
 }
 
 fn readable(fds: &[libc::pollfd], k: usize) -> bool {
@@ -652,6 +717,8 @@ pub fn run() -> i32 {
         bent: false,
         held: false,
         saver: sources::held(),
+        woke: false,
+        named: false,
         quit: false,
         next_base: 0.0,
         last_tick: tm::mono(),
@@ -697,6 +764,9 @@ pub fn run() -> i32 {
             break;
         }
         let mono = tm::mono();
+        if std::mem::take(&mut app.named) {
+            look_due = Some(mono);
+        }
         if look_due.map_or(false, |t| mono >= t) {
             look_due = None;
             if let Some(open) = hypr.look() {
@@ -714,6 +784,13 @@ pub fn run() -> i32 {
         if restack_due.map_or(false, |t| mono >= t) {
             restack_due = None;
             app.restack();
+        }
+        // a frame handed over a second ago and still not shown: this screen is off, so stop until it asks again
+        for s in app.screens.iter_mut() {
+            s.dark = s.waiting && mono - s.sent > 1.0;
+        }
+        if std::mem::take(&mut app.woke) && mono - app.scene_at.1 > 2.0 {
+            app.rebase(true); // awake again: show this minute, not the one it went dark in
         }
         if mono >= saver_due {
             saver_due = mono + 5.0;
@@ -821,7 +898,12 @@ pub fn run() -> i32 {
             if WALLPAPERS.iter().any(|name| text.contains(&format!("openlayer>>{}", name))) {
                 restack_due = Some(mono + 0.4);
             }
-            if ["workspace", "window", "fullscreen", "floating", "special", "monitor"].iter().any(|key| text.contains(key)) && look_due.is_none() {
+            // only what can change what covers the wallpaper; a window's title or focus cannot
+            let covering = text.lines().filter_map(|l| l.split(">>").next()).any(|event| {
+                !matches!(event, "windowtitle" | "windowtitlev2" | "activewindow" | "activewindowv2" | "urgent" | "activelayout" | "submap" | "screencast" | "bell")
+                    && ["workspace", "window", "fullscreen", "floating", "special", "monitor", "minimized"].iter().any(|key| event.contains(key))
+            });
+            if covering && look_due.is_none() {
                 look_due = Some(mono + 0.14);
             }
         }
