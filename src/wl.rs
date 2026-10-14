@@ -137,6 +137,7 @@ struct Screen {
     dark: bool,
     interaction: Interaction,
     targets: Vec<Target>,
+    base_stale: bool,
 }
 
 impl Screen {
@@ -216,6 +217,7 @@ impl App {
             dark: false,
             interaction: Interaction::new(),
             targets: Vec::new(),
+            base_stale: true,
         });
     }
 
@@ -310,6 +312,12 @@ impl App {
 
     /// Work the scene out afresh and paint the still frame for every screen.
     fn rebase(&mut self, instant: bool) {
+        let mono = tm::mono();
+        if !self.screens.iter().any(|s| s.cache.is_some() && crate::buffer::should_paint_base(s.open, s.dark, self.probe, !s.shown.is_empty())) {
+            for s in &mut self.screens { s.base_stale = true; s.fade = None; s.interaction.reset(); }
+            self.next_base = mono + 3600.0;
+            return;
+        }
         let now = tm::now();
         if self.real.as_ref().map_or(true, |r| now - r.1 > 15.0) {
             let state = State::load();
@@ -326,9 +334,7 @@ impl App {
             for s in self.screens.iter_mut() {
                 s.interaction.reset();
                 s.targets.clear();
-                if let Some(c) = s.cache.take() {
-                    s.cache = Some(Cache::new(self.view, config().seed, c.w, c.h));
-                }
+                s.base_stale = true;
             }
             self.world.leave();
         }
@@ -337,12 +343,23 @@ impl App {
         sc.live = true;
         let mono = tm::mono();
         for s in self.screens.iter_mut() {
+            if !crate::buffer::should_paint_base(s.open, s.dark, self.probe, !s.shown.is_empty()) {
+                s.base_stale = true;
+                s.fade = None;
+                s.interaction.reset();
+                continue;
+            }
+            if s.cache.as_ref().is_some_and(|c| c.view.id() != self.view.id()) {
+                let c = s.cache.take().unwrap();
+                s.cache = Some(Cache::new(self.view, config().seed, c.w, c.h));
+            }
             let Some(cache) = &s.cache else { continue };
             let (cv, anchors) = paint::render(&mut sc, cache);
             let px = cv.finish(sc.p.grain);
             s.anchors = anchors;
             s.targets = cache.stage.targets(&sc, &s.anchors);
-            if ((instant || self.bent) && !moved) || s.shown.len() != px.len() {
+            let stale = std::mem::replace(&mut s.base_stale, false);
+            if stale || ((instant || self.bent) && !moved) || s.shown.len() != px.len() {
                 s.shown = px;
                 s.from = Vec::new();
                 s.to = Vec::new();
@@ -363,7 +380,7 @@ impl App {
             s.to = px;
             s.fade = Some((mono, y0, y1));
         }
-        if let Some(s) = self.screens.iter().find(|s| s.cache.is_some()) {
+        if let Some(s) = self.screens.iter().find(|s| self.seen(s) && !s.base_stale && s.cache.is_some()) {
             self.sources = Sources::from(&s.anchors, &s.cache.as_ref().unwrap().lay);
         }
         self.world.retune(&sc, self.screens.iter().map(|s| s.anchors.flicker.len()).max().unwrap_or(0));
@@ -380,6 +397,7 @@ impl App {
 
     /// Paint one frame for one screen and hand it to the compositor.
     fn draw(&mut self, i: usize, mono: f64) {
+        if !self.seen(&self.screens[i]) && self.screens[i].sent > 0.0 { return; }
         let moving = self.moving(&self.screens[i]);
         let Some(sc) = self.scene.as_ref() else { return };
         let s = &mut self.screens[i];
@@ -419,21 +437,17 @@ impl App {
         let px = unsafe { std::slice::from_raw_parts_mut(pool.map.add(buf.at), w * h) };
         let everywhere = moving && self.world.everywhere();
         let mut damage: Vec<Rect> = std::mem::take(&mut s.last_dirty);
-        if let Some((y0, y1)) = buf.stale.take() {
-            px[y0 * w..y1 * w].copy_from_slice(&s.shown[y0 * w..y1 * w]);
+        let stale = buf.stale.take();
+        crate::buffer::restore_pixels(px, &s.shown, w, stale, &buf.dirty);
+        if let Some((y0, y1)) = stale {
             damage.push(Rect { x0: 0, y0: y0 as i32, x1: w as i32, y1: y1 as i32 });
         }
-        for r in buf.dirty.drain(..) {
-            let (x0, x1) = (r.x0.max(0) as usize, (r.x1.max(0) as usize).min(w));
-            for y in r.y0.max(0) as usize..(r.y1.max(0) as usize).min(h) {
-                px[y * w + x0..y * w + x1].copy_from_slice(&s.shown[y * w + x0..y * w + x1]);
-            }
-        }
-        let mut dirty = Vec::new();
+        let mut dirty = std::mem::take(&mut buf.dirty);
+        dirty.clear();
         if moving {
             let began = tm::mono();
             let now = self.scene_at.0 + (mono - self.scene_at.1);
-            let mut frame = Frame { w, h, px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None };
+            let mut frame = Frame { w, h, px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: everywhere };
             let mut d = Draw::new(&mut frame, &mut self.shaper);
             self.world.draw(&mut d, sc, cache, &s.anchors, now);
             s.interaction.draw(&mut d, sc, &cache.lay);
@@ -461,7 +475,7 @@ impl App {
     fn pace(&self) -> f64 {
         let Some(sc) = self.scene.as_ref() else { return 0.0 };
         if !self.screens.iter().any(|s| self.moving(s) && s.pool.is_some()) {
-            return if self.screens.iter().any(|s| s.fade.is_some() && !s.dark) { 20.0 } else { 0.0 };
+            return if self.screens.iter().any(|s| s.fade.is_some() && self.seen(s)) { 20.0 } else { 0.0 };
         }
         let fps = config().fps as f64;
         if self.world.everywhere() {
@@ -469,7 +483,7 @@ impl App {
             fps.min(if self.world.raining() { 22.0 } else { 18.0 })
         } else if self.world.lively() || self.screens.iter().any(|s| self.moving(s) && (s.interaction.active() || s.cache.as_ref().map_or(false, |c| c.stage.lively(sc, self.clock(tm::mono()))))) {
             fps
-        } else if self.screens.iter().any(|s| s.fade.is_some()) {
+        } else if self.screens.iter().any(|s| s.fade.is_some() && self.seen(s)) {
             fps.min(20.0)
         } else {
             (fps / 2.0).max(10.0)
@@ -1063,7 +1077,7 @@ pub fn one_frame(path: &str, seconds: f64, m: &Moment, size: (usize, usize), see
     }
     let mut dirty = Vec::new();
     let mut shaper = Shaper::new();
-    let mut frame = Frame { w: cache.w, h: cache.h, px: &mut px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None };
+    let mut frame = Frame { w: cache.w, h: cache.h, px: &mut px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: false };
     let mut d = Draw::new(&mut frame, &mut shaper);
     world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds);
     interaction.draw(&mut d, &sc, &cache.lay);
@@ -1072,7 +1086,7 @@ pub fn one_frame(path: &str, seconds: f64, m: &Moment, size: (usize, usize), see
     let began = std::time::Instant::now();
     for _ in 0..50 {
         let (mut scratch, mut marks) = (px.clone(), Vec::new());
-        let mut frame = Frame { w: cache.w, h: cache.h, px: &mut scratch, dirty: &mut marks, depth: Some(cache.stage.depth()), behind: None };
+        let mut frame = Frame { w: cache.w, h: cache.h, px: &mut scratch, dirty: &mut marks, depth: Some(cache.stage.depth()), behind: None, full_damage: world.everywhere() };
         let mut d = Draw::new(&mut frame, &mut shaper);
         world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds);
         interaction.draw(&mut d, &sc, &cache.lay);

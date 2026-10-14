@@ -1,6 +1,7 @@
 //! dormer — a window in the roof: the same rooftops under the real sky.
 
 mod color;
+mod buffer;
 mod dev;
 mod gfx;
 mod interaction;
@@ -813,7 +814,7 @@ fn cmd_soak(args: &Args) -> Result<i32, String> {
             world.step(r.range(0.01, 0.12), &sc, &src, m.ts + step as f64 * 61.0);
             if step % 20 == 19 {
                 let mut dirty = Vec::new();
-                let mut frame = gfx::Frame { w: cache.w, h: cache.h, px: &mut px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None };
+                let mut frame = gfx::Frame { w: cache.w, h: cache.h, px: &mut px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: false };
                 let mut d = gfx::Draw::new(&mut frame, &mut shaper);
                 world.draw(&mut d, &sc, cache, &anchors, m.ts + step as f64);
                 cache.stage.lively(&sc, m.ts + step as f64 * 61.0);

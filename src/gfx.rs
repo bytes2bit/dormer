@@ -250,6 +250,8 @@ pub struct Frame<'a> {
     pub depth: Option<&'a Depth>,
     /// draw behind this layer and everything nearer (0: behind all of the ground)
     pub behind: Option<usize>,
+    /// The caller already knows the whole buffer is damaged (precipitation).
+    pub full_damage: bool,
 }
 
 impl Surface for Frame<'_> {
@@ -300,6 +302,7 @@ impl Surface for Frame<'_> {
     }
 
     fn touch(&mut self, r: Rect) {
+        if self.full_damage { return; }
         let r = Rect { x0: r.x0.max(0), y0: r.y0.max(0), x1: r.x1.min(self.w as i32), y1: r.y1.min(self.h as i32) };
         if r.x1 > r.x0 && r.y1 > r.y0 {
             self.dirty.push(r);
@@ -1099,4 +1102,27 @@ pub fn save_png(path: &str, w: usize, h: usize, px: &[u32]) -> Result<(), String
     }
     writer.write_image_data(&rgb).map_err(|e| e.to_string())?;
     writer.finish().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_damage_skips_shape_bookkeeping_without_changing_pixels() {
+        let mut results = Vec::new();
+        for full_damage in [false, true] {
+            let mut px = vec![0xFF10_2030; 32 * 32];
+            let mut dirty = Vec::new();
+            let mut sh = Shaper::new();
+            let mut frame = Frame { w: 32, h: 32, px: &mut px, dirty: &mut dirty, depth: None, behind: None, full_damage };
+            let mut d = Draw::new(&mut frame, &mut sh);
+            d.ellipse(15.5, 15.5, 9.0, 6.0, [230.0, 210.0, 180.0], 0.8);
+            d.line((2.0, 3.0), (27.0, 25.0), 1.2, [80.0, 130.0, 200.0], 0.6);
+            assert_eq!(dirty.is_empty(), full_damage);
+            results.push(px);
+        }
+        assert_eq!(results[0], results[1]);
+        assert_ne!(results[0][15 * 32 + 15], 0xFF10_2030);
+    }
 }

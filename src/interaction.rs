@@ -361,7 +361,7 @@ pub(crate) mod tests {
             let original = pixels.clone();
             let mut dirty = Vec::new();
             let mut shaper = crate::gfx::Shaper::new();
-            let mut f = Frame { w: 640, h: 400, px: &mut pixels, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None };
+            let mut f = Frame { w: 640, h: 400, px: &mut pixels, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: false };
             i.draw(&mut Draw::new(&mut f, &mut shaper), &sc, &cache.lay);
             assert!(!dirty.is_empty(), "{} response is invisible", view.id());
             assert!(pixels != original, "{} response must change pixels", view.id());
@@ -369,7 +369,7 @@ pub(crate) mod tests {
             for _ in 0..100 { i.step(0.12, &targets); }
             dirty.clear();
             let before = pixels.clone();
-            let mut f = Frame { w: 640, h: 400, px: &mut pixels, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None };
+            let mut f = Frame { w: 640, h: 400, px: &mut pixels, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: false };
             i.draw(&mut Draw::new(&mut f, &mut shaper), &sc, &cache.lay);
             assert!(dirty.is_empty());
             assert_eq!(pixels, before);
