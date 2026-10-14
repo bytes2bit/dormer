@@ -143,6 +143,8 @@ pub trait Stage {
 
     fn lights(&self, sc: &Scene) -> Lights;
 
+    fn targets(&self, _sc: &Scene, _anchors: &Anchors) -> Vec<crate::interaction::Target> { Vec::new() }
+
     /// Paint what this view adds overhead. Under our own sky that is anything of its own that
     /// belongs behind the clouds, after the sun, moon and stars are in. In a void it is the whole
     /// sky: nothing has been painted yet.

@@ -58,6 +58,7 @@ More:
     dormer tour --seconds 60    how long the day takes
     dormer pretend off          stop pretending early     --minutes N: how long to pretend
     dormer live --frame a.png   draw one frame of the living wallpaper to a file
+                                --pointer X,Y --click X,Y: try touching it (1600x1000 design units)
     dormer hold on|off          freeze or release the living wallpaper (for a lock screen)
     dormer install --no-live    still frames only         dormer uninstall
     dormer dev --here           run the panel in this terminal
@@ -872,7 +873,10 @@ fn main() {
         "live" => match args.get("frame") {
             Some(path) => moment(&args).and_then(|m| {
                 let seconds = args.num::<f64>("seconds")?.unwrap_or(20.0);
-                wl::one_frame(path, seconds, &m, size_of(&args)?, seed_of(&args)?).map(|_| 0)
+                let point = |key: &str| -> Result<Option<gfx::P>, String> {
+                    args.get(key).map(|s| interaction::parse_point(s).ok_or_else(|| format!("--{} needs two finite coordinates: X,Y", key))).transpose()
+                };
+                wl::one_frame(path, seconds, &m, size_of(&args)?, seed_of(&args)?, point("pointer")?, point("click")?).map(|_| 0)
             }),
             None => Ok(wl::run()),
         },

@@ -592,6 +592,15 @@ impl Stage for Shore {
         out.glades.push([lay.dx(20.0), lay.dy(770.0), lay.dx(380.0), lay.dy(900.0)]);
     }
 
+    fn targets(&self, sc: &Scene, a: &Anchors) -> Vec<crate::interaction::Target> {
+        use crate::interaction::{common_targets, Action, Target};
+        let mut out = common_targets(sc, &self.lay, a);
+        out.push(Target::new(100, [900.0, SEA + 8.0, 1580.0, 858.0], (1170.0, 790.0), Action::Ripple, mix(sc.sky[4], WARM[1], 0.28), Some(3)));
+        let window = self.lay.back(self.land.dx(194.0), self.land.dy(498.0));
+        out.push(Target::near(101, window, 25.0, Action::Light, WARM[1], None));
+        out
+    }
+
     fn alive(&self, d: &mut Draw<Frame>, sc: &Scene, _a: &Anchors, t: f32, now: f64) {
         let (lay, land) = (&self.lay, &self.land);
         let u = lay.u;

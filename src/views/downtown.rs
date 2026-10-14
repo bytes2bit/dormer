@@ -496,6 +496,13 @@ impl Stage for City {
         }
     }
 
+    fn targets(&self, sc: &Scene, a: &Anchors) -> Vec<crate::interaction::Target> {
+        use crate::interaction::{common_targets, Action, Target};
+        let mut out = common_targets(sc, &self.lay, a);
+        out.push(Target::near(100, (CLOCK_X, CLOCK_TOP - 16.0), 25.0, Action::Light, WARM[1], Some(4)));
+        out
+    }
+
     fn lively(&self, sc: &Scene, now: f64) -> bool {
         train_at(sc, now).is_some()
     }

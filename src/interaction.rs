@@ -47,6 +47,30 @@ pub fn hit(targets: &[Target], p: P) -> Option<Target> {
     })
 }
 
+pub fn parse_point(text: &str) -> Option<P> {
+    let (x, y) = text.split_once(',')?;
+    let p: P = (x.trim().parse().ok()?, y.trim().parse().ok()?);
+    (p.0.is_finite() && p.1.is_finite()).then_some(p)
+}
+
+pub fn common_targets(sc: &Scene, lay: &Layout, a: &crate::views::Anchors) -> Vec<Target> {
+    let mut out = Vec::new();
+    if !sc.void && sc.eph.sun.el > -4.0 && !sc.storm && sc.rain < 0.5 && sc.snow < 0.6 {
+        if let Some(p) = a.perch {
+            out.push(Target::near(1, lay.back(p.0, p.1), 32.0, Action::Birds, hex(sc.p.bird), Some(0)));
+        }
+        if sc.season != 0 {
+            for (n, g) in a.glades.iter().enumerate() {
+                let p0 = lay.back(g[0], g[1]);
+                let p1 = lay.back(g[2], g[3]);
+                let col = if sc.season == 1 { [232.0, 178.0, 192.0] } else { [186.0, 126.0, 74.0] };
+                out.push(Target::new(10 + n, [p0.0, p0.1, p1.0, p1.1], ((p0.0 + p1.0) / 2.0, (p0.1 + p1.1) / 2.0), Action::Leaves, col, None));
+            }
+        }
+    }
+    out
+}
+
 /// Wayland coordinates are logical, not buffer pixels (including rotated outputs).
 pub fn pointer_position(p: (f64, f64), logical: (u32, u32), lay: &Layout) -> Option<P> {
     if logical.0 == 0 || logical.1 == 0 || !p.0.is_finite() || !p.1.is_finite()
@@ -224,7 +248,7 @@ fn cat_ears(d: &mut Draw<Frame>, lay: &Layout, at: P, col: Rgb, attention: f32, 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::props::Layout;
 
@@ -251,6 +275,13 @@ mod tests {
         assert_eq!(hit(&targets, (800.0, 800.0)).unwrap().id, 2);
         assert!(hit(&targets, (600.0, 600.0)).is_none());
         assert!(hit(&targets, (f32::NAN, 800.0)).is_none());
+    }
+
+    #[test]
+    fn preview_coordinates_require_two_finite_numbers() {
+        assert_eq!(parse_point("850,920"), Some((850.0, 920.0)));
+        assert_eq!(parse_point(" 1.5, -12 "), Some((1.5, -12.0)));
+        for input in ["1", "1,2,3", "NaN,2", "1,inf", "x,4"] { assert!(parse_point(input).is_none()); }
     }
 
     #[test]
@@ -300,5 +331,70 @@ mod tests {
         assert!(!first.active());
         assert_eq!(first.reaction_count(), 0);
         assert_eq!(first.hover_strength(), 0.0);
+    }
+
+    pub fn scene(view: &dyn crate::views::View, rain: bool) -> Scene {
+        let mut wx = crate::sky::from_wmo(if rain { 61 } else { 0 });
+        wx.temp = 18.0;
+        crate::scene::scene(crate::scene::Inputs {
+            ts: 1791925200.0, wx: &wx, mode: "dark", machine: Default::default(),
+            place: &crate::scene::Place { lat: 35.7758, lon: -5.7909, name: String::new() },
+            drift: None, top: None, rates: Default::default(), horizon: view.horizon(),
+            knobs: &[], void: view.sky() == crate::views::Sky::Void,
+        })
+    }
+
+    #[test]
+    fn every_view_has_local_targets_and_expired_effects_touch_nothing() {
+        for view in crate::views::ALL {
+            let cache = crate::paint::Cache::new(view, 12, 640, 400);
+            let mut sc = scene(view, true);
+            sc.live = true;
+            let (cv, anchors) = crate::paint::render(&mut sc, &cache);
+            let targets = cache.stage.targets(&sc, &anchors);
+            assert!(!targets.is_empty(), "{} has no targets", view.id());
+            let t = targets[0];
+            let mut i = Interaction::new();
+            assert!(i.click(t.at, 0.0, &targets), "{} target cannot be clicked", view.id());
+            i.step(0.12, &targets);
+            let mut pixels = cv.finish(sc.p.grain);
+            let original = pixels.clone();
+            let mut dirty = Vec::new();
+            let mut shaper = crate::gfx::Shaper::new();
+            let mut f = Frame { w: 640, h: 400, px: &mut pixels, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None };
+            i.draw(&mut Draw::new(&mut f, &mut shaper), &sc, &cache.lay);
+            assert!(!dirty.is_empty(), "{} response is invisible", view.id());
+            assert!(pixels != original, "{} response must change pixels", view.id());
+            assert!(dirty.iter().map(|r| r.area()).sum::<i64>() < 640 * 400 / 2);
+            for _ in 0..100 { i.step(0.12, &targets); }
+            dirty.clear();
+            let before = pixels.clone();
+            let mut f = Frame { w: 640, h: 400, px: &mut pixels, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None };
+            i.draw(&mut Draw::new(&mut f, &mut shaper), &sc, &cache.lay);
+            assert!(dirty.is_empty());
+            assert_eq!(pixels, before);
+        }
+    }
+
+    #[test]
+    fn wet_street_and_void_targets_follow_the_scene() {
+        let street = crate::views::find("street").unwrap();
+        let cache = crate::paint::Cache::new(street, 12, 640, 400);
+        let mut sc = scene(street, false);
+        sc.live = true;
+        sc.cat_out = true;
+        sc.cat_asleep = false;
+        let (_, a) = crate::paint::render(&mut sc, &cache);
+        let dry = cache.stage.targets(&sc, &a);
+        assert!(!dry.iter().any(|t| t.action == Action::Cat || t.action == Action::Ripple));
+        sc.rain = 0.8;
+        sc.cat_out = false;
+        let wet = cache.stage.targets(&sc, &a);
+        assert!(wet.iter().any(|t| t.action == Action::Cat));
+        assert!(wet.iter().any(|t| t.action == Action::Ripple));
+        let moon = crate::views::find("moon").unwrap();
+        let cache = crate::paint::Cache::new(moon, 12, 640, 400);
+        let sc = scene(moon, true);
+        assert!(!cache.stage.targets(&sc, &crate::views::Anchors::default()).iter().any(|t| matches!(t.action, Action::Birds | Action::Leaves)));
     }
 }

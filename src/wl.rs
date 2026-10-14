@@ -913,11 +913,15 @@ pub fn run() -> i32 {
 }
 
 /// Run the world for a while without a screen and save what it would be showing.
-pub fn one_frame(path: &str, seconds: f64, m: &Moment, size: (usize, usize), seed: u64) -> Result<(), String> {
+pub fn one_frame(path: &str, seconds: f64, m: &Moment, size: (usize, usize), seed: u64, pointer: Option<crate::gfx::P>, click: Option<crate::gfx::P>) -> Result<(), String> {
     let cache = Cache::new(m.view, seed, size.0, size.1);
     let mut sc = build(m, None);
     sc.live = true;
     let (cv, anchors) = paint::render(&mut sc, &cache);
+    let targets = cache.stage.targets(&sc, &anchors);
+    let mut interaction = crate::interaction::Interaction::new();
+    interaction.motion(pointer);
+    if let Some(p) = click { interaction.click(p, 0.0, &targets); }
     let mut px = cv.finish(sc.p.grain);
     let mut world = World::new(7);
     world.retune(&sc, anchors.flicker.len());
@@ -937,12 +941,14 @@ pub fn one_frame(path: &str, seconds: f64, m: &Moment, size: (usize, usize), see
             }
         }
         world.step(1.0 / 30.0, &sc, &src, m.ts + k as f64 / 30.0);
+        interaction.step(1.0 / 30.0, &targets);
     }
     let mut dirty = Vec::new();
     let mut shaper = Shaper::new();
     let mut frame = Frame { w: cache.w, h: cache.h, px: &mut px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None };
     let mut d = Draw::new(&mut frame, &mut shaper);
     world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds);
+    interaction.draw(&mut d, &sc, &cache.lay);
     drop(d);
     // how long a frame of this takes to draw
     let began = std::time::Instant::now();
@@ -951,6 +957,7 @@ pub fn one_frame(path: &str, seconds: f64, m: &Moment, size: (usize, usize), see
         let mut frame = Frame { w: cache.w, h: cache.h, px: &mut scratch, dirty: &mut marks, depth: Some(cache.stage.depth()), behind: None };
         let mut d = Draw::new(&mut frame, &mut shaper);
         world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds);
+        interaction.draw(&mut d, &sc, &cache.lay);
     }
     let copy = std::time::Instant::now();
     for _ in 0..50 {

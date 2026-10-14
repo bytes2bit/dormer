@@ -1041,6 +1041,14 @@ impl Stage for Station {
         }
     }
 
+    fn targets(&self, sc: &Scene, _a: &Anchors) -> Vec<crate::interaction::Target> {
+        use crate::interaction::{Action, Target};
+        vec![
+            Target::new(100, [280.0, 850.0, 1350.0, 975.0], (650.0, 935.0), Action::Dust, mix(sc.layers[4], REGOLITH, 0.45), None),
+            Target::near(101, self.lay.back(self.st.dx(CUPOLA.0), self.st.dy(CUPOLA.1)), 38.0, Action::Light, WARM[1], None),
+        ]
+    }
+
     fn alive(&self, d: &mut Draw<Frame>, sc: &Scene, _a: &Anchors, t: f32, now: f64) {
         let day = day_of(sc);
         let lamp = Lamp::of(sc, &day, &self.lay);

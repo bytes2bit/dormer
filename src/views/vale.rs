@@ -692,6 +692,15 @@ impl Stage for Dale {
         out.leaves = true;
     }
 
+    fn targets(&self, sc: &Scene, a: &Anchors) -> Vec<crate::interaction::Target> {
+        use crate::interaction::{common_targets, Action, Target};
+        let mut out = common_targets(sc, &self.lay, a);
+        out.push(Target::new(100, [570.0, SHORE + 5.0, 1230.0, 766.0], (930.0, 741.0), Action::Ripple, mix(sc.sky[4], BLUE, 0.25), Some(CRAGS)));
+        out.push(Target::new(101, [1300.0, 565.0, 1570.0, 880.0], (1430.0, 735.0), Action::Sparks, AMBER, None));
+        out.push(Target::near(102, (1220.0, 856.0), 65.0, Action::Sparks, BLUE, None));
+        out
+    }
+
     fn alive(&self, d: &mut Draw<Frame>, sc: &Scene, _a: &Anchors, t: f32, now: f64) {
         let lay = &self.lay;
         let u = lay.u;
