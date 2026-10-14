@@ -62,6 +62,9 @@ command = "true"
             while not state.exists() and time.monotonic() < deadline:
                 drain()
             assert state.exists(), "panel did not publish its initial state"
+            send(b"\x1b[C")
+            latest = transcript.rsplit(b"\x1b[H\x1b[2J", 1)[-1]
+            assert b"time of day" in latest and b"preview" in latest, "first adjustment must show its selected control"
             send(b"2\x1b[C")
             first = json.loads(state.read_text())["set"]["cover"]
             assert first > 0
@@ -73,7 +76,16 @@ command = "true"
             send(b"5a")  # empty Scene group must still allow global reset
             assert json.loads(state.read_text())["set"] == {}
             stamp = state.stat().st_mtime_ns
+            def idle_switches():
+                total = 0
+                for path in Path(f"/proc/{process.pid}/task").glob("*/status"):
+                    for line in path.read_text().splitlines():
+                        if line.startswith("voluntary_ctxt_switches:"):
+                            total += int(line.split()[1])
+                return total
+            before = idle_switches()
             drain(0.3)
+            assert idle_switches() - before <= 3, "idle painter polls instead of sleeping until a change"
             assert state.stat().st_mtime_ns == stamp, "idle panel rewrites overrides"
             send(b"q")
             assert process.wait(timeout=5) == 0

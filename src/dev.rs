@@ -13,7 +13,7 @@
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Map, Value};
@@ -118,21 +118,19 @@ fn show(key: &str, v: f64) -> String {
 
 /// Without the living wallpaper running, each change is drawn to the still wallpaper in the background.
 struct Painter {
-    changed: Arc<AtomicBool>,
+    changed: SyncSender<()>,
     status: Arc<Mutex<String>>,
 }
 
 impl Painter {
     fn start() -> Painter {
-        let (changed, status) = (Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(String::new())));
-        let (c, s) = (changed.clone(), status.clone());
+        let (changed, pending) = sync_channel(1);
+        let status = Arc::new(Mutex::new(String::new()));
+        let s = status.clone();
         std::thread::spawn(move || {
             let exe = launcher();
-            loop {
-                if !c.swap(false, Ordering::SeqCst) {
-                    std::thread::sleep(std::time::Duration::from_millis(40));
-                    continue;
-                }
+            while pending.recv().is_ok() {
+                while pending.try_recv().is_ok() {}
                 if sources::live_pid() != 0 {
                     *s.lock().unwrap() = "live".to_string();
                     continue;
@@ -140,9 +138,7 @@ impl Painter {
                 *s.lock().unwrap() = "drawing".to_string();
                 let began = std::time::Instant::now();
                 let _ = Command::new(&exe).args(["draw", "--force"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
-                if !c.load(Ordering::SeqCst) {
-                    *s.lock().unwrap() = format!("drawn in {:.2}s", began.elapsed().as_secs_f64());
-                }
+                *s.lock().unwrap() = format!("drawn in {:.2}s", began.elapsed().as_secs_f64());
             }
         });
         Painter { changed, status }
@@ -181,7 +177,7 @@ impl Panel {
         let view = sources::view();
         let mut p = Panel {
             set: Map::new(),
-            at: "view",
+            at: "time",
             real: Map::new(),
             real_at: 0.0,
             base: None,
@@ -255,7 +251,7 @@ impl Panel {
             self.cache = Cache::new(m.view, config().seed, 320, 200);
             self.rows = rows_for(m.view);
             if !self.rows.iter().any(|r| r.key == self.at) {
-                self.at = "view";
+                self.select_group(self.group);
             }
         }
         let held = std::mem::take(&mut m.knobs);
@@ -311,7 +307,7 @@ impl Panel {
         self.published_at = tm::mono();
         sources::write_atomic(&cache_file("dev.json"), &json!({"pid": std::process::id(), "set": self.set}).to_string());
         self.describe();
-        self.painter.changed.store(true, Ordering::SeqCst);
+        let _ = self.painter.changed.try_send(());
         true
     }
 
