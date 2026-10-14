@@ -30,6 +30,7 @@ containers = true            # one blue window for each running Docker container
 
 [live]
 fps = 30
+interactive = true          # mouse reactions on the exposed wallpaper; false passes clicks to desktop icons beneath it
 
 [power]
 hold_file = ""           # while this file exists the wallpaper holds still (e.g. a battery-saver flag)

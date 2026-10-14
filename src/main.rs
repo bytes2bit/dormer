@@ -6,6 +6,7 @@ mod gfx;
 mod interaction;
 mod live;
 mod paint;
+mod pointer;
 mod props;
 mod rng;
 mod scene;

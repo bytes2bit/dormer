@@ -80,6 +80,7 @@ pub struct Config {
     pub lamp: Vec<String>,
     pub containers: bool,
     pub fps: u32,
+    pub interactive: bool,
     pub hold_file: String,
     pub terminal: String,
     /// was there a config file to read
@@ -116,11 +117,16 @@ pub fn config() -> &'static Config {
                 .unwrap_or_else(|| vec!["claude".into(), "codex".into()]),
             containers: get("house", "containers").and_then(|v| v.as_bool()).unwrap_or(true),
             fps: number("live", "fps").map(|v| v.clamp(5.0, 60.0) as u32).unwrap_or(30),
+            interactive: interactive_setting(&table),
             hold_file: text("power", "hold_file", ""),
             terminal: text("dev", "terminal", ""),
             found,
         }
     })
+}
+
+fn interactive_setting(table: &toml::Table) -> bool {
+    table.get("live").and_then(|t| t.get("interactive")).and_then(|v| v.as_bool()).unwrap_or(true)
 }
 
 /// Run a command and wait a little for it. None when it could not be run or took too long.
@@ -561,5 +567,16 @@ pub fn set_wallpaper(path: &str) -> Result<(), String> {
         None => Err(format!("{} did not answer", kind)),
         Some((false, out, err)) => Err(format!("{} refused the picture: {}", kind, if err.trim().is_empty() { out.trim() } else { err.trim() })),
         Some(_) => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn interactive_defaults_on_and_can_restore_click_through() {
+        assert!(super::interactive_setting(&toml::Table::new()));
+        assert!(!super::interactive_setting(&"[live]\ninteractive = false".parse().unwrap()));
+        assert!(super::interactive_setting(&"[live]\ninteractive = true".parse().unwrap()));
+        assert!(super::interactive_setting(&"[live]\ninteractive = 'invalid'".parse().unwrap()));
     }
 }

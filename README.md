@@ -42,6 +42,35 @@ Your machine shows in the same four ways everywhere, staged for the place:
 
 The lamp burns low and red when the battery is nearly flat.
 
+## Touching the view
+
+Move the mouse over the exposed wallpaper and click what is there. The clock
+and windows catch a little light; birds leave their perch. On the coast the
+water ripples, on the moon a little dust lifts from the ground, and in the vale
+the tree and stones release small lights. In the street, the cat on your sill
+turns an ear and the wet road answers with ripples. Reactions fade back into
+the ordinary scene; they do not change the real time, weather or machine signals.
+
+The wallpaper takes mouse input only where it is exposed. Application windows
+keep their input, and dormer never takes keyboard focus. If your desktop has
+icons beneath the wallpaper, set `interactive = false` under `[live]` to pass
+clicks through to them. Restart `dormer live` after changing that setting.
+
+Reactions stay on the monitor you touched. They have fixed limits and short
+lifetimes; moving the mouse does not rebuild the still picture. A stationary
+hover settles, and hidden, sleeping or held wallpapers accept no new reactions.
+
+To try a reaction without changing your desktop, use a headless export:
+
+```sh
+dormer live --frame ripple.png --view coast --at '2026-10-13 21:00' \
+  --weather clear --mode dark --seconds 0.7 --pointer 1170,790 --click 1170,790
+```
+
+Coordinates use the 1600x1000 design space. `--seconds` sets how far the
+simulation runs after the click. PNG exports still read your config and weather
+sources; see `AGENTS.md` for an isolated, offline preview setup.
+
 ## What the sky is telling you
 
 This is the sky of `rooftops`, `street`, `city`, `coast` and `vale`. The moon has none of

@@ -21,10 +21,11 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_buffer, wl_callback, wl_compositor, wl_output, wl_region, wl_registry, wl_shm, wl_shm_pool, wl_surface};
+use wayland_client::protocol::{wl_buffer, wl_callback, wl_compositor, wl_output, wl_pointer, wl_seat, wl_region, wl_registry, wl_shm, wl_shm_pool, wl_surface};
 use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle};
 use wayland_protocols::wp::fractional_scale::v1::client::{wp_fractional_scale_manager_v1, wp_fractional_scale_v1};
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
+use wayland_protocols::wp::cursor_shape::v1::client::{wp_cursor_shape_manager_v1, wp_cursor_shape_device_v1};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::gfx::{Draw, Frame, Rect, Shaper};
@@ -33,6 +34,8 @@ use crate::paint::{self, Cache};
 use crate::scene::Scene;
 use crate::sources::{self, cache_file, config};
 use crate::views::{Anchors, View};
+use crate::interaction::{Interaction, Target, pointer_position};
+use crate::pointer::{Cursor, Seat};
 use crate::{build, real_moment, tm, with_overrides, Moment, State};
 
 /// Layers this one must stay above.
@@ -132,6 +135,8 @@ struct Screen {
     sent: f64,
     /// the compositor has not shown that frame for a while: the screen is off or asleep
     dark: bool,
+    interaction: Interaction,
+    targets: Vec<Target>,
 }
 
 impl Screen {
@@ -148,12 +153,14 @@ impl Screen {
     }
 }
 
-struct App {
+pub(crate) struct App {
     compositor: wl_compositor::WlCompositor,
     shm: wl_shm::WlShm,
     shell: zwlr_layer_shell_v1::ZwlrLayerShellV1,
     viewporter: Option<wp_viewporter::WpViewporter>,
     fractions: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
+    cursors: Option<wp_cursor_shape_manager_v1::WpCursorShapeManagerV1>,
+    seats: Vec<Seat>,
     qh: QueueHandle<App>,
     screens: Vec<Screen>,
     view: &'static dyn View,
@@ -207,6 +214,8 @@ impl App {
             open: true,
             sent: 0.0,
             dark: false,
+            interaction: Interaction::new(),
+            targets: Vec::new(),
         });
     }
 
@@ -223,9 +232,11 @@ impl App {
         layer.set_exclusive_zone(-1);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_size(0, 0);
-        let region = self.compositor.create_region(&self.qh, ());
-        surface.set_input_region(Some(&region)); // clicks pass through
-        region.destroy();
+        if !config().interactive {
+            let region = self.compositor.create_region(&self.qh, ());
+            surface.set_input_region(Some(&region));
+            region.destroy();
+        }
         let viewport = self.viewporter.as_ref().map(|v| v.get_viewport(&surface, &self.qh, ()));
         let fraction = self.fractions.as_ref().map(|f| f.get_fractional_scale(&surface, &self.qh, id));
         surface.commit();
@@ -234,6 +245,7 @@ impl App {
 
     /// A new wallpaper surface from someone else would sit on top of ours: map ours again, above it.
     fn restack(&mut self) {
+        for seat in &mut self.seats { seat.focus.leave(); }
         for i in 0..self.screens.len() {
             let (id, output) = (self.screens[i].id, self.screens[i].output.clone());
             self.screens[i].release();
@@ -245,6 +257,7 @@ impl App {
             s.fraction = fraction;
             s.waiting = false;
             s.last_dirty.clear();
+            s.interaction.reset();
         }
     }
 
@@ -278,6 +291,7 @@ impl App {
         s.waiting = false;
         s.fade = None;
         s.last_dirty.clear();
+        s.interaction.reset();
         if !keep || s.shown.len() != w * h {
             s.shown.clear();
         }
@@ -310,6 +324,8 @@ impl App {
         if moved {
             self.view = m.view;
             for s in self.screens.iter_mut() {
+                s.interaction.reset();
+                s.targets.clear();
                 if let Some(c) = s.cache.take() {
                     s.cache = Some(Cache::new(self.view, config().seed, c.w, c.h));
                 }
@@ -325,6 +341,7 @@ impl App {
             let (cv, anchors) = paint::render(&mut sc, cache);
             let px = cv.finish(sc.p.grain);
             s.anchors = anchors;
+            s.targets = cache.stage.targets(&sc, &s.anchors);
             if ((instant || self.bent) && !moved) || s.shown.len() != px.len() {
                 s.shown = px;
                 s.from = Vec::new();
@@ -419,6 +436,7 @@ impl App {
             let mut frame = Frame { w, h, px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None };
             let mut d = Draw::new(&mut frame, &mut self.shaper);
             self.world.draw(&mut d, sc, cache, &s.anchors, now);
+            s.interaction.draw(&mut d, sc, &cache.lay);
             self.spent[3] += tm::mono() - began;
         }
         let dirty = if everywhere { vec![Rect { x0: 0, y0: 0, x1: w as i32, y1: h as i32 }] } else { coalesce(dirty, w as i32, h as i32) };
@@ -449,7 +467,7 @@ impl App {
         if self.world.everywhere() {
             // rain repaints the whole screen every frame, so it gets a film's frame rate; snow falls slower still
             fps.min(if self.world.raining() { 22.0 } else { 18.0 })
-        } else if self.world.lively() || self.screens.iter().any(|s| self.moving(s) && s.cache.as_ref().map_or(false, |c| c.stage.lively(sc, self.clock(tm::mono())))) {
+        } else if self.world.lively() || self.screens.iter().any(|s| self.moving(s) && (s.interaction.active() || s.cache.as_ref().map_or(false, |c| c.stage.lively(sc, self.clock(tm::mono()))))) {
             fps
         } else if self.screens.iter().any(|s| s.fade.is_some()) {
             fps.min(20.0)
@@ -467,6 +485,12 @@ impl App {
         let dt = (mono - self.last_tick).clamp(0.0, 0.12) as f32;
         self.last_tick = mono;
         let began = tm::mono();
+        let paused = self.held || self.saver;
+        for s in &mut self.screens {
+            if !paused && ((s.open && !s.dark) || self.probe) {
+                s.interaction.step(dt, &s.targets);
+            } else { s.interaction.reset(); }
+        }
         if let Some(sc) = self.scene.as_ref() {
             if self.screens.iter().any(|s| self.moving(s)) {
                 let now = self.scene_at.0 + (mono - self.scene_at.1);
@@ -483,6 +507,29 @@ impl App {
     }
 }
 
+impl App {
+    fn forget_output(&mut self, id: u32) {
+        for seat in &mut self.seats { seat.focus.clear_output(id); }
+    }
+
+    fn motion(&mut self, seat_id: u32, point: (f64, f64)) {
+        let Some(seat) = self.seats.iter_mut().find(|s| s.id == seat_id) else { return };
+        seat.focus.motion(point);
+        let Some(id) = seat.focus.output else { return };
+        let Some(i) = self.screen(id) else { return };
+        if !self.moving(&self.screens[i]) { return; }
+        let s = &mut self.screens[i];
+        if let Some(cache) = &s.cache { s.interaction.motion(pointer_position(point, s.logical, &cache.lay)); }
+    }
+
+    fn leave(&mut self, seat_id: u32) {
+        let Some(seat) = self.seats.iter_mut().find(|s| s.id == seat_id) else { return };
+        let id = seat.focus.output;
+        seat.focus.leave();
+        if let Some(i) = id.and_then(|id| self.screen(id)) { self.screens[i].interaction.motion(None); }
+    }
+}
+
 // ── what the compositor tells us ─────────────────────────────────────────────
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for App {
@@ -492,10 +539,18 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for App {
                 let output = registry.bind::<wl_output::WlOutput, _, _>(name, version.min(4), qh, name);
                 app.add_screen(name, output);
             }
+            wl_registry::Event::Global { name, interface, version } if interface == "wl_seat" && config().interactive => {
+                app.seats.push(Seat::new(name, registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(7), qh, name)));
+            }
             wl_registry::Event::GlobalRemove { name } => {
                 if let Some(i) = app.screen(name) {
+                    app.forget_output(name);
                     let mut s = app.screens.remove(i);
                     s.release();
+                }
+                if let Some(i) = app.seats.iter().position(|s| s.id == name) {
+                    app.leave(name);
+                    app.seats.remove(i);
                 }
             }
             _ => {}
@@ -541,6 +596,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, u32> for App {
                 }
             }
             zwlr_layer_surface_v1::Event::Closed => {
+                app.forget_output(*id);
                 let mut s = app.screens.remove(i);
                 s.release();
             }
@@ -592,6 +648,60 @@ delegate_noop!(App: zwlr_layer_shell_v1::ZwlrLayerShellV1);
 delegate_noop!(App: wp_viewporter::WpViewporter);
 delegate_noop!(App: wp_viewport::WpViewport);
 delegate_noop!(App: wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1);
+delegate_noop!(App: wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
+delegate_noop!(App: wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
+delegate_noop!(App: ignore wl_buffer::WlBuffer);
+
+impl Dispatch<wl_seat::WlSeat, u32> for App {
+    fn event(app: &mut Self, _: &wl_seat::WlSeat, event: wl_seat::Event, id: &u32, _: &Connection, qh: &QueueHandle<Self>) {
+        if let wl_seat::Event::Capabilities { capabilities } = event {
+            let pointer = capabilities.into_result().is_ok_and(|c| c.contains(wl_seat::Capability::Pointer));
+            if !pointer { app.leave(*id); }
+            let Some(seat) = app.seats.iter_mut().find(|s| s.id == *id) else { return };
+            if pointer && seat.pointer.is_none() {
+                let p = seat.seat.get_pointer(qh, *id);
+                seat.shape = app.cursors.as_ref().map(|m| m.get_pointer(&p, qh, ()));
+                seat.pointer = Some(p);
+            } else if !pointer { seat.release_pointer(); }
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, u32> for App {
+    fn event(app: &mut Self, pointer: &wl_pointer::WlPointer, event: wl_pointer::Event, seat_id: &u32, _: &Connection, _: &QueueHandle<Self>) {
+        match event {
+            wl_pointer::Event::Enter { serial, surface, surface_x, surface_y } => {
+                app.leave(*seat_id);
+                let Some(i) = app.screens.iter().position(|s| s.surface == surface) else { return };
+                let id = app.screens[i].id;
+                let scale = if app.screens[i].scale120 > 0 { app.screens[i].scale120.div_ceil(120) as i32 } else { app.screens[i].whole_scale.max(1) };
+                let Some(seat) = app.seats.iter_mut().find(|s| s.id == *seat_id) else { return };
+                seat.focus.enter(id, (surface_x, surface_y));
+                if let Some(shape) = &seat.shape {
+                    shape.set_shape(serial, wp_cursor_shape_device_v1::Shape::Default);
+                } else {
+                    if seat.cursor.as_ref().is_none_or(|c| c.scale != scale) { seat.cursor = Cursor::new(&app.compositor, &app.shm, &app.qh, scale); }
+                    if let Some(cursor) = &seat.cursor { cursor.set(pointer, serial); }
+                }
+                app.motion(*seat_id, (surface_x, surface_y));
+            }
+            wl_pointer::Event::Motion { surface_x, surface_y, .. } => app.motion(*seat_id, (surface_x, surface_y)),
+            wl_pointer::Event::Leave { .. } => app.leave(*seat_id),
+            wl_pointer::Event::Button { button, state, .. } if button == 0x110 && matches!(state.into_result(), Ok(wl_pointer::ButtonState::Pressed)) => {
+                let Some(seat) = app.seats.iter().find(|s| s.id == *seat_id) else { return };
+                let Some(id) = seat.focus.output else { return };
+                let Some(point) = seat.focus.on(id) else { return };
+                let Some(i) = app.screen(id) else { return };
+                if !app.moving(&app.screens[i]) { return; }
+                let s = &mut app.screens[i];
+                if let Some(p) = s.cache.as_ref().and_then(|c| pointer_position(point, s.logical, &c.lay)) {
+                    s.interaction.click(p, tm::mono(), &s.targets);
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 // ── asking Hyprland whether anyone can see the wallpaper ─────────────────────
 
@@ -705,6 +815,8 @@ pub fn run() -> i32 {
         shell,
         viewporter: globals.bind(&qh, 1..=1, ()).ok(),
         fractions: globals.bind(&qh, 1..=1, ()).ok(),
+        cursors: globals.bind(&qh, 1..=1, ()).ok(),
+        seats: Vec::new(),
         qh: qh.clone(),
         screens: Vec::new(),
         view: sources::view(),
@@ -730,6 +842,12 @@ pub fn run() -> i32 {
     for (name, version) in outputs {
         let output = globals.registry().bind::<wl_output::WlOutput, _, _>(name, version.min(4), &qh, name);
         app.add_screen(name, output);
+    }
+    if config().interactive {
+        let seats: Vec<(u32, u32)> = globals.contents().with_list(|list| list.iter().filter(|g| g.interface == "wl_seat").map(|g| (g.name, g.version)).collect());
+        for (name, version) in seats {
+            app.seats.push(Seat::new(name, globals.registry().bind::<wl_seat::WlSeat, _, _>(name, version.min(7), &qh, name)));
+        }
     }
 
     let _ = std::fs::create_dir_all(sources::cache());
