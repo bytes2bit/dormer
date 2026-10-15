@@ -552,6 +552,123 @@ pub fn repair(labels: [Label; 4], then: Label, j: &CrewJob) -> Vec<Stage> {
     ]
 }
 
+// ── ordinary life: visits, meetings, rounds ──────────────────────────────────
+
+/// Someone in a story: who they are, and where they come from.
+#[derive(Clone, Copy, Debug)]
+pub struct Walker {
+    pub who: Slot,
+    pub role: Role,
+    pub kind: Kind,
+    pub look: u32,
+    pub from: RouteId,
+}
+
+impl Walker {
+    fn appear(&self) -> Step {
+        Step::Spawn { who: self.who, spec: ActorSpec { kind: self.kind, role: self.role, at: self.from, look: self.look } }
+    }
+}
+
+/// How long anyone will take to get anywhere before the job carries on without them.
+const PATIENCE: f32 = 70.0;
+
+/// Someone arrives at `at`, stays for `secs` doing `pose`, and leaves by `exit`.
+/// Labels: [come, stay, leave]; the last thing it does is go to `then`.
+pub fn visit(labels: [Label; 3], then: Label, w: Walker, at: RouteId, pose: ActorPose, secs: f32, exit: RouteId) -> Vec<Stage> {
+    let [come, stay, leave] = labels;
+    vec![
+        Stage {
+            label: come,
+            steps: vec![
+                w.appear(),
+                Step::Move { who: w.who, to: at, run: false },
+                Step::Await { until: Until::Arrived(vec![w.who]), timeout: PATIENCE, on_timeout: Some(leave) },
+                Step::Goto(stay),
+            ],
+        },
+        Stage { label: stay, steps: vec![Step::Pose { who: w.who, pose }, Step::Wait(secs), Step::Pose { who: w.who, pose: ActorPose::Idle }, Step::Goto(leave)] },
+        Stage {
+            label: leave,
+            steps: vec![
+                Step::Move { who: w.who, to: exit, run: false },
+                Step::Await { until: Until::Arrived(vec![w.who]), timeout: PATIENCE, on_timeout: None },
+                Step::Despawn { who: w.who },
+                Step::Goto(then),
+            ],
+        },
+    ]
+}
+
+/// Two people walk up to each other, talk (one waves, then both stand) and part.
+/// Labels: [come, talk, part].
+pub fn meeting(labels: [Label; 3], then: Label, a: Walker, b: Walker, at_a: RouteId, at_b: RouteId, secs: f32, exit_a: RouteId, exit_b: RouteId) -> Vec<Stage> {
+    let [come, talk, part] = labels;
+    vec![
+        Stage {
+            label: come,
+            steps: vec![
+                a.appear(),
+                b.appear(),
+                Step::Move { who: a.who, to: at_a, run: false },
+                Step::Move { who: b.who, to: at_b, run: false },
+                Step::Await { until: Until::Arrived(vec![a.who, b.who]), timeout: PATIENCE, on_timeout: Some(part) },
+                Step::Goto(talk),
+            ],
+        },
+        Stage {
+            label: talk,
+            steps: vec![
+                Step::Pose { who: a.who, pose: ActorPose::Wave },
+                Step::Pose { who: b.who, pose: ActorPose::Look },
+                Step::Wait(secs * 0.3),
+                Step::Pose { who: a.who, pose: ActorPose::Idle },
+                Step::Pose { who: b.who, pose: ActorPose::Idle },
+                Step::Wait(secs * 0.7),
+                Step::Goto(part),
+            ],
+        },
+        Stage {
+            label: part,
+            steps: vec![
+                Step::Move { who: a.who, to: exit_a, run: false },
+                Step::Move { who: b.who, to: exit_b, run: false },
+                Step::Await { until: Until::Arrived(vec![a.who, b.who]), timeout: PATIENCE, on_timeout: None },
+                Step::Despawn { who: a.who },
+                Step::Despawn { who: b.who },
+                Step::Goto(then),
+            ],
+        },
+    ]
+}
+
+/// A round: someone walks through these places, working a while at each, and leaves.
+/// Labels: [start, leave].
+pub fn round(labels: [Label; 2], then: Label, w: Walker, stops: &[(RouteId, ActorPose, f32)], exit: RouteId) -> Vec<Stage> {
+    let [start, leave] = labels;
+    let mut steps = vec![w.appear()];
+    for (place, pose, secs) in stops {
+        steps.push(Step::Move { who: w.who, to: *place, run: false });
+        steps.push(Step::Await { until: Until::Arrived(vec![w.who]), timeout: PATIENCE, on_timeout: Some(leave) });
+        steps.push(Step::Pose { who: w.who, pose: *pose });
+        steps.push(Step::Wait(*secs));
+        steps.push(Step::Pose { who: w.who, pose: ActorPose::Idle });
+    }
+    steps.push(Step::Goto(leave));
+    vec![
+        Stage { label: start, steps },
+        Stage {
+            label: leave,
+            steps: vec![
+                Step::Move { who: w.who, to: exit, run: false },
+                Step::Await { until: Until::Arrived(vec![w.who]), timeout: PATIENCE, on_timeout: None },
+                Step::Despawn { who: w.who },
+                Step::Goto(then),
+            ],
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

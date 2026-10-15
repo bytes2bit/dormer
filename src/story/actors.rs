@@ -293,6 +293,13 @@ pub struct Actor {
     token: u64,
 }
 
+impl Actor {
+    /// The place it last reached.
+    pub fn node_id(&self) -> RouteId {
+        self.node
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ActorCommand {
     Move(RouteId),

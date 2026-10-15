@@ -44,6 +44,8 @@ pub struct Facts {
     pub rain: bool,
     pub snow: bool,
     pub wind: f32,
+    /// -1.6 to 1.6: how hard, and which way across the picture, the wind blows
+    pub wind_x: f32,
     pub storm: bool,
     pub night: bool,
     pub cold: bool,
@@ -88,6 +90,8 @@ pub enum Test {
     Memory(MemoryKey, u16),
     /// the actor in this slot could not get where it was going, or is gone
     Failed(Slot),
+    /// it came to rest hanging from something (a sheet on an aerial)
+    Hanging(ObjectId),
     /// the user has helped this run
     Assisted,
     /// the user has disturbed this run since it began
@@ -149,6 +153,10 @@ pub enum Change {
 pub enum Step {
     Wait(f32),
     Move { who: Slot, to: RouteId, run: bool },
+    /// go to the place on the routes nearest to where this object is now
+    MoveNear { who: Slot, obj: ObjectId, run: bool },
+    /// break it up: pieces fly from where it is
+    Shatter { obj: ObjectId, material: super::model::Material },
     Look { who: Slot, at: P },
     LookAt { who: Slot, obj: ObjectId },
     Pose { who: Slot, pose: ActorPose },
@@ -309,6 +317,9 @@ impl StoryDef {
                     Step::Wait(s) if !(s.is_finite() && *s >= 0.0 && *s < 600.0) => {
                         return Err(fail(at, "waits for a time that is not finite, or over ten minutes".into()));
                     }
+                    Step::MoveNear { obj, .. } | Step::Shatter { obj, .. } if !object(*obj) => {
+                        return Err(fail(at, format!("names object {}, which is not an object of this view", obj.0)));
+                    }
                     Step::Move { to, .. } if defs.routes.node(*to).is_none() => {
                         return Err(fail(at, format!("moves to place {}, which is not on the view's routes", to.0)));
                     }
@@ -340,7 +351,7 @@ impl StoryDef {
                             jump(l)?;
                         }
                     }
-                    Step::Move { who, .. } | Step::Look { who, .. } | Step::LookAt { who, .. } | Step::Pose { who, .. } | Step::Carry { who, .. } | Step::Drop { who }
+                    Step::Move { who, .. } | Step::MoveNear { who, .. } | Step::Look { who, .. } | Step::LookAt { who, .. } | Step::Pose { who, .. } | Step::Carry { who, .. } | Step::Drop { who }
                     | Step::Reserve { who, .. } | Step::Release { who } | Step::Spawn { who, .. } | Step::Despawn { who }
                         if who.0 as usize >= SLOTS =>
                     {
@@ -880,6 +891,34 @@ impl Director {
                     let _ = p.actors.command(a, cmd, graph, p.objects);
                 }
             }
+            Step::MoveNear { who, obj, run } => {
+                if let (Some(a), Some(def)) = (self.actor(ri, who), p.defs.object(obj)) {
+                    let at = p.objects.get(obj).map_or(def.at, |s| (def.at.0 + s.pose.dx, def.at.1 + s.pose.dy));
+                    let kind = p.actors.get(a).map(|x| x.kind);
+                    let near = graph
+                        .nodes
+                        .iter()
+                        .filter(|n| kind.is_some_and(|k| p.actors.get(a).is_some_and(|ac| graph.path(k, ac.node_id(), n.id, &|_| true).is_some())))
+                        .min_by(|x, y| {
+                            let d = |n: &super::actors::Node| (n.at.0 - at.0).powi(2) + (n.at.1 - at.1).powi(2);
+                            d(x).partial_cmp(&d(y)).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .map(|n| n.id);
+                    match near {
+                        Some(to) => {
+                            let cmd = if run { ActorCommand::Run(to) } else { ActorCommand::Move(to) };
+                            let _ = p.actors.command(a, cmd, graph, p.objects);
+                        }
+                        None => self.runs[ri].failed[who.0 as usize] = true,
+                    }
+                }
+            }
+            Step::Shatter { obj, material } => {
+                if let Some(def) = p.defs.object(obj) {
+                    let at = p.objects.get(obj).map_or(def.at, |s| (def.at.0 + s.pose.dx, def.at.1 + s.pose.dy));
+                    p.physics.shatter_at(at, material, 90.0);
+                }
+            }
             Step::Look { who, at } => {
                 if let Some(a) = self.actor(ri, who) {
                     let _ = p.actors.command(a, ActorCommand::Look(at), graph, p.objects);
@@ -1021,6 +1060,7 @@ impl Director {
                 Some(r) => r.failed[slot.0 as usize % SLOTS] || r.actors[slot.0 as usize % SLOTS].and_then(|a| p.actors.get(a)).map_or(true, |a| matches!(a.state, ActorState::Failed(_))),
                 None => false,
             },
+            Test::Hanging(o) => p.objects.get(o).is_some_and(|s| s.attachment == Attachment::Hanging && s.damage == Damage::Broken),
             Test::Assisted => run.is_some_and(|r| r.assisted),
             Test::Interfered => run.is_some_and(|r| r.interfered),
             Test::Flag(f) => run.is_some_and(|r| r.flags & (1 << (f % 8)) != 0),

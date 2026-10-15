@@ -224,7 +224,8 @@ impl StoryWorld {
         self.facts = facts;
         // the picture must repaint what had been changed
         for (id, before) in objects_before {
-            if before != form_of(&ObjectState::default()) {
+            let ordinary = self.definition.object(id).map_or(ObjectState::default(), ObjectStore::fresh);
+            if before != form_of(&ordinary) {
                 if let Some(d) = self.definition.object(id) {
                     self.changes.push(DesignRect::from(d.bounds));
                 }
@@ -255,6 +256,8 @@ impl StoryWorld {
         if *facts != self.facts {
             self.facts = *facts;
             self.facts_changed = true;
+            // the wind that carries a sheet is the wind that is blowing
+            self.physics.wind = Some(facts.wind_x * 150.0);
         }
         let n = self.clock.advance(dt);
         for _ in 0..n {
@@ -549,6 +552,7 @@ pub fn facts_of(sc: &crate::scene::Scene) -> Facts {
         rain: sc.rain > 0.15,
         snow: sc.snow > 0.15,
         wind: sc.wind,
+        wind_x: sc.wind_x,
         storm: sc.storm,
         night: sc.dark > 0.55,
         cold: sc.temp < 3.0,

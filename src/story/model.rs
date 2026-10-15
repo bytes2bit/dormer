@@ -187,11 +187,19 @@ pub struct ObjectDef {
     pub layer: Option<u8>,
     /// how hard a pull must be, in design units dragged, before an attachment lets go
     pub break_pull: f32,
+    /// not there until a story puts it there: a ladder, a barrier
+    pub hidden: bool,
 }
 
 impl ObjectDef {
     pub fn new(id: u16, name: &'static str, material: Material, at: P, bounds: [f32; 4]) -> ObjectDef {
-        ObjectDef { id: ObjectId(id), name, material, at, bounds, accepts: Accepts::NONE, layer: None, break_pull: 0.0 }
+        ObjectDef { id: ObjectId(id), name, material, at, bounds, accepts: Accepts::NONE, layer: None, break_pull: 0.0, hidden: false }
+    }
+
+    /// Something that is not there until a story brings it.
+    pub fn hidden(mut self) -> ObjectDef {
+        self.hidden = true;
+        self
     }
 
     pub fn accepting(mut self, a: Accepts) -> ObjectDef {
@@ -306,7 +314,12 @@ pub struct ObjectStore {
 
 impl ObjectStore {
     pub fn new(defs: &[ObjectDef]) -> ObjectStore {
-        ObjectStore { slots: defs.iter().map(|d| (d.id, ObjectState::default())).collect() }
+        ObjectStore { slots: defs.iter().map(|d| (d.id, Self::fresh(d))).collect() }
+    }
+
+    /// What an object is like before anything has happened to it.
+    pub fn fresh(d: &ObjectDef) -> ObjectState {
+        ObjectState { visible: !d.hidden, ..Default::default() }
     }
 
     pub fn get(&self, id: ObjectId) -> Option<&ObjectState> {
@@ -331,7 +344,7 @@ impl ObjectStore {
         let old = std::mem::take(&mut self.slots);
         self.slots = defs
             .iter()
-            .map(|d| (d.id, old.iter().find(|s| s.0 == d.id).map(|s| s.1).unwrap_or_default()))
+            .map(|d| (d.id, old.iter().find(|s| s.0 == d.id).map(|s| s.1).unwrap_or_else(|| Self::fresh(d))))
             .collect();
     }
 }

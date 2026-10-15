@@ -207,6 +207,8 @@ pub struct Physics {
     grab: Option<Grab>,
     rng: Fast,
     next_origin: u64,
+    /// the wind in design units a second; None: what the surfaces say
+    pub wind: Option<f32>,
     pending_patch: Vec<(P, f32)>,
     pub tick: u64,
     /// bodies refused because the ceiling was reached
@@ -274,6 +276,7 @@ impl Physics {
             grab: None,
             rng: Fast::new(seed ^ 0xB0D1E5),
             next_origin: 1 << 40,
+            wind: None,
             pending_patch: Vec::new(),
             tick: 0,
             refused: 0,
@@ -320,6 +323,11 @@ impl Physics {
         }
         self.bodies.push(body);
         true
+    }
+
+    /// Break up something at a place: its pieces fly, and are gone in a few seconds.
+    pub fn shatter_at(&mut self, at: P, material: Material, speed: f32) {
+        self.shatter(at, material, speed);
     }
 
     fn shatter(&mut self, at: P, material: Material, speed: f32) {
@@ -553,6 +561,7 @@ impl Physics {
     pub fn step(&mut self, surfaces: &SurfaceMap, objects: &mut ObjectStore, defs: &[ObjectDef], bus: &mut EventBus) {
         self.tick += 1;
         let dt = STEP;
+        let wind = self.wind.unwrap_or(surfaces.wind);
 
         // objects settling back on their fixings
         let mut settled = Vec::new();
@@ -614,8 +623,8 @@ impl Physics {
             if light {
                 // the wind pushes what it can lift, and air slows it; on the ground a light
                 // thing lies where it fell unless it is a gale
-                if !b.contact || surfaces.wind.abs() > 250.0 {
-                    b.vel.0 += (surfaces.wind - b.vel.0) * (2.2 * dt);
+                if !b.contact || wind.abs() > 250.0 {
+                    b.vel.0 += (wind - b.vel.0) * (2.2 * dt);
                 }
                 b.vel.1 *= 1.0 - 1.2 * dt;
             }
