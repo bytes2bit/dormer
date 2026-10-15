@@ -40,6 +40,12 @@ struct Ctx<'a> {
 
 /// Draw one frame. Also fills in `sc.lit_share`.
 pub fn render(sc: &mut Scene, cache: &Cache) -> (Canvas, Anchors) {
+    render_state(sc, cache, &crate::story::Snapshot::intact())
+}
+
+/// Draw one frame with the objects of the living scene in the state `state` has them in.
+/// Everything else is exactly what `render` paints.
+pub fn render_state(sc: &mut Scene, cache: &Cache, state: &crate::story::Snapshot) -> (Canvas, Anchors) {
     let lay = cache.lay;
     let (w, h) = (cache.w, cache.h);
     let mut out = Anchors::default();
@@ -101,12 +107,12 @@ pub fn render(sc: &mut Scene, cache: &Cache) -> (Canvas, Anchors) {
         if sc.balloon && home {
             props::balloon(&mut d, sc, &lay, (sc.ts / 500.0) as f32);
         }
-        cache.stage.ground(&mut d, sc, &lights, &mut bloom, &mut out);
+        cache.stage.ground_state(&mut d, sc, &lights, &mut bloom, &mut out, state);
         lap("ground");
         if !sc.live && home {
             weather(&mut d, &cx);
         }
-        cache.stage.indoors(&mut d, sc, &mut bloom, &mut out);
+        cache.stage.indoors_state(&mut d, sc, &mut bloom, &mut out, state);
     }
     bloom.apply(&mut cv, ((2.0 * lay.u).round() as usize).max(1));
     lap("bloom");

@@ -144,6 +144,40 @@ pub trait Stage {
 
     fn targets(&self, _sc: &Scene, _anchors: &Anchors) -> Vec<crate::interaction::Target> { Vec::new() }
 
+    /// What this view lets a living scene change: its objects, routes and stories. None where
+    /// nothing in the view is interactive.
+    fn story(&self) -> Option<crate::story::Definition> {
+        None
+    }
+
+    /// `ground`, but with the state of the scene's objects: a hydrant with its cap off, a sign
+    /// hanging by one fixing, a line without its sheet. Whatever is missing or moving is simply
+    /// not painted here, so the real background shows where it was. Views with no objects of
+    /// their own to change need not say.
+    fn ground_state(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors, _state: &crate::story::Snapshot) {
+        self.ground(d, sc, lights, bloom, out)
+    }
+
+    /// `indoors`, with the state of the objects.
+    fn indoors_state(&self, d: &mut Draw<Canvas>, sc: &Scene, bloom: &mut Bloom, out: &mut Anchors, _state: &crate::story::Snapshot) {
+        self.indoors(d, sc, bloom, out)
+    }
+
+    /// What hides what, once the objects have changed: None when it has not.
+    fn story_depth(&self, _state: &crate::story::Snapshot) -> Option<Depth> {
+        None
+    }
+
+    /// The objects of this view that are moving, swinging or carried, drawn over the base. The
+    /// still base left them out. `indoors` asks for those on our side of the glass, after the
+    /// weather; otherwise they are drawn before it.
+    fn story_alive(&self, _d: &mut Draw<Frame>, _sc: &Scene, _state: &crate::story::Snapshot, _t: f32, _indoors: bool) {}
+
+    /// The light people and vehicles stand in on the given layer.
+    fn story_tone(&self, sc: &Scene, _layer: Option<u8>) -> crate::story::draw::Tone {
+        crate::story::draw::Tone::new(sc.layers[3], 0.18 + 0.7 * sc.day, sc.sky[5])
+    }
+
     /// Paint what this view adds overhead. Under our own sky that is anything of its own that
     /// belongs behind the clouds, after the sun, moon and stars are in. In a void it is the whole
     /// sky: nothing has been painted yet.

@@ -853,7 +853,7 @@ fn cmd_soak(args: &Args) -> Result<i32, String> {
                 let mut dirty = Vec::new();
                 let mut frame = gfx::Frame { w: cache.w, h: cache.h, px: &mut px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: false };
                 let mut d = gfx::Draw::new(&mut frame, &mut shaper);
-                world.draw(&mut d, &sc, cache, &anchors, m.ts + step as f64);
+                world.draw(&mut d, &sc, cache, &anchors, m.ts + step as f64, None);
                 cache.stage.lively(&sc, m.ts + step as f64 * 61.0);
                 live::coalesce(dirty, cache.w as i32, cache.h as i32);
             }

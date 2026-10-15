@@ -617,7 +617,7 @@ impl World {
     }
 
     /// Draw everything that moves onto one screen.
-    pub fn draw(&self, d: &mut Draw<Frame>, sc: &Scene, cache: &Cache, a: &Anchors, now: f64) {
+    pub fn draw(&self, d: &mut Draw<Frame>, sc: &Scene, cache: &Cache, a: &Anchors, now: f64, story: Option<&crate::story::StoryWorld>) {
         let lay = &cache.lay;
         let t = self.t as f32;
         let k = lay.w / VW;
@@ -744,6 +744,14 @@ impl World {
             }
             cache.stage.alive(d, sc, a, t, now);
             d.s.behind = None;
+            // what the living scene has changed or set moving, then who is about: all of it
+            // is outdoors, so the weather falls in front of it
+            if let Some(w) = story {
+                cache.stage.story_alive(d, sc, &w.snapshot(), t, false);
+                d.s.behind = None;
+                crate::story::draw::scene(d, lay, sc, cache.stage.as_ref(), w, t);
+            }
+            d.s.behind = None;
             let ink = mix(hex(sc.p.ink), AMBER, 0.4);
             for n in &self.notes {
                 let f = n.age / n.life;
@@ -810,6 +818,11 @@ impl World {
             // whatever the view keeps indoors is nearer than all of that
             d.s.behind = None;
             cache.stage.indoors_alive(d, sc, t, now, !self.drops.is_empty() || !self.flakes.is_empty());
+            if let Some(w) = story {
+                // on our side of the glass, after the rain
+                d.s.behind = None;
+                cache.stage.story_alive(d, sc, &w.snapshot(), t, true);
+            }
         }
     }
 }

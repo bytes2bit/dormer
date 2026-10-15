@@ -480,7 +480,7 @@ impl App {
             let now = self.scene_at.0 + (mono - self.scene_at.1);
             let mut frame = Frame { w, h, px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: everywhere };
             let mut d = Draw::new(&mut frame, &mut self.shaper);
-            self.world.draw(&mut d, sc, cache, &s.anchors, now);
+            self.world.draw(&mut d, sc, cache, &s.anchors, now, None);
             s.interaction.draw(&mut d, sc, &cache.lay);
             self.spent[3] += tm::mono() - began;
         }
@@ -1130,7 +1130,7 @@ pub fn one_frame(path: &str, seconds: f64, m: &Moment, size: (usize, usize), see
     let mut shaper = Shaper::new();
     let mut frame = Frame { w: cache.w, h: cache.h, px: &mut px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: false };
     let mut d = Draw::new(&mut frame, &mut shaper);
-    world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds);
+    world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds, None);
     interaction.draw(&mut d, &sc, &cache.lay);
     drop(d);
     // how long a frame of this takes to draw
@@ -1139,7 +1139,7 @@ pub fn one_frame(path: &str, seconds: f64, m: &Moment, size: (usize, usize), see
         let (mut scratch, mut marks) = (px.clone(), Vec::new());
         let mut frame = Frame { w: cache.w, h: cache.h, px: &mut scratch, dirty: &mut marks, depth: Some(cache.stage.depth()), behind: None, full_damage: world.everywhere() };
         let mut d = Draw::new(&mut frame, &mut shaper);
-        world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds);
+        world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds, None);
         interaction.draw(&mut d, &sc, &cache.lay);
     }
     let copy = std::time::Instant::now();

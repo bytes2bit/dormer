@@ -36,6 +36,35 @@ impl Tone {
     }
 }
 
+/// Everything a scene has in it that is not part of the view's own drawing: puddles, loose debris,
+/// and the people, animals and vehicles, far to near, each behind what hides it where it stands.
+pub fn scene(d: &mut Draw<crate::gfx::Frame>, lay: &Layout, sc: &crate::scene::Scene, stage: &dyn crate::views::Stage, world: &super::StoryWorld, t: f32) {
+    let tone = stage.story_tone(sc, None);
+    d.s.behind = None;
+    for p in &world.physics().patches {
+        puddle(d, lay, p, &tone, 1.0);
+    }
+    for b in world.bodies() {
+        if !matches!(b.kind, BodyKind::Thrown(_)) {
+            body(d, lay, b, &tone, 1.0);
+        }
+    }
+    let mut order: Vec<&Actor> = world.actors().iter().collect();
+    order.sort_by(|a, b| a.pos.1.partial_cmp(&b.pos.1).unwrap_or(std::cmp::Ordering::Equal));
+    for a in order {
+        d.s.behind = a.layer.map(|l| l as usize);
+        let tone = stage.story_tone(sc, a.layer);
+        match a.kind {
+            Kind::Person => person(d, lay, a, &tone, t, 1.0),
+            Kind::Cat => cat(d, lay, a, &tone, t, 1.0),
+            Kind::Bird => bird(d, lay, a, &tone, t, 1.0),
+            Kind::Boat => boat(d, lay, a, &tone, t, 1.0),
+            Kind::Car | Kind::Van | Kind::Truck | Kind::Train => vehicle(d, lay, a, &tone, t, 1.0),
+        }
+    }
+    d.s.behind = None;
+}
+
 pub fn ink<S: Surface>(d: &mut Draw<S>, lay: &Layout, pts: &[P], w: f32, col: Rgb, a: f32) {
     let px: Vec<P> = pts.iter().map(|p| (lay.dx(p.0), lay.dy(p.1))).collect();
     d.path(&px, lay.d(w).max(0.7), col, a);

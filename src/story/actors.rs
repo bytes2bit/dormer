@@ -105,6 +105,8 @@ pub struct Node {
     pub mode: Mode,
     /// how big a person is here, as a fraction of the nearest pavement's: perspective
     pub scale: f32,
+    /// the layer of the view that hides someone standing here (see `Depth`); None: nothing does
+    pub layer: Option<u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -130,7 +132,15 @@ impl RouteGraph {
     }
 
     pub fn add_node(&mut self, id: u16, at: P, mode: Mode, scale: f32) -> &mut RouteGraph {
-        self.nodes.push(Node { id: RouteId(id), at, mode, scale });
+        self.nodes.push(Node { id: RouteId(id), at, mode, scale, layer: None });
+        self
+    }
+
+    /// Say what hides someone at this place.
+    pub fn behind(&mut self, id: u16, layer: u8) -> &mut RouteGraph {
+        if let Some(n) = self.nodes.iter_mut().find(|n| n.id.0 == id) {
+            n.layer = Some(layer);
+        }
         self
     }
 
@@ -271,6 +281,8 @@ pub struct Actor {
     pub state: ActorState,
     pub carrying: Option<ObjectId>,
     pub gaze: Option<P>,
+    /// the layer that hides it where it stands
+    pub layer: Option<u8>,
     node: RouteId,
     path: Vec<RouteId>,
     goal: Option<RouteId>,
@@ -374,6 +386,7 @@ impl ActorSystem {
             state: ActorState::Idle,
             carrying: None,
             gaze: None,
+            layer: node.layer,
             node: spec.at,
             path: Vec::new(),
             goal: None,
@@ -634,6 +647,7 @@ impl ActorSystem {
             a.pos = to_at;
             a.node = next;
             a.scale = to.scale;
+            a.layer = to.layer;
             a.path.remove(0);
         } else {
             let k = travel / dist;

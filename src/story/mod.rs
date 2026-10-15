@@ -538,5 +538,20 @@ pub fn facts_of(sc: &crate::scene::Scene) -> Facts {
     }
 }
 
+/// The pixels of the screen that a design-space region covers, with `margin` design units and
+/// the bloom's own few pixels round it, for the light that spills from what is in it.
+pub fn pixel_rect(r: &DesignRect, lay: &crate::props::Layout, margin: f32) -> crate::gfx::Rect {
+    // the bloom works in cells of four pixels and blurs a little: three cells of it is enough
+    const BLOOM_PX: f32 = 12.0;
+    let (x0, y0) = (lay.dx(r.x0 - margin) - BLOOM_PX, lay.dy(r.y0 - margin) - BLOOM_PX);
+    let (x1, y1) = (lay.dx(r.x1 + margin) + BLOOM_PX, lay.dy(r.y1 + margin) + BLOOM_PX);
+    crate::gfx::Rect { x0: x0.floor() as i32, y0: y0.floor() as i32, x1: x1.ceil() as i32, y1: y1.ceil() as i32 }
+}
+
+/// How far, in design units, the glow of a lit object reaches round its bounds.
+pub const LIGHT_MARGIN: f32 = 26.0;
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod render_tests;
