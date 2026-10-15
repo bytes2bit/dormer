@@ -11,6 +11,13 @@
 //! the cache, and they count only while the panel is alive. Quit, and the
 //! real sky comes back.
 
+#[allow(dead_code)]
+mod input;
+#[allow(dead_code)]
+mod layout;
+#[allow(dead_code)]
+mod model;
+
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{sync_channel, SyncSender};
