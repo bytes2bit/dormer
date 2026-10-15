@@ -68,24 +68,6 @@ pub enum Field {
 }
 
 impl Field {
-    /// A name that stays the same between runs and views.
-    pub fn key(self) -> String {
-        match self {
-            Field::View => "view".into(),
-            Field::Mode => "mode".into(),
-            Field::Fps => "fps".into(),
-            Field::Interactive => "interactive".into(),
-            Field::Time => "time".into(),
-            Field::Date => "date".into(),
-            Field::Channel(c) => c.key().into(),
-            Field::Birds => "birds".into(),
-            Field::Meteors => "meteors".into(),
-            Field::Planes => "planes".into(),
-            Field::Stories => "stories".into(),
-            Field::Knob(k) => format!("knob:{}", k),
-        }
-    }
-
     pub fn category(self) -> Category {
         match self {
             Field::View | Field::Mode | Field::Fps | Field::Interactive => Category::Appearance,
@@ -182,7 +164,6 @@ pub enum Action {
     Focus(Field),
     FocusStep(i32),
     Category(Category),
-    CategoryStep(i32),
     /// move by this many steps of the field's size (negative goes down)
     Adjust(Field, f64),
     Big(Field, f64),
@@ -256,10 +237,6 @@ pub struct Draft {
 impl Draft {
     pub fn new(saved: Arc<RuntimeSettings>) -> Draft {
         Draft { edited: (*saved).clone(), saved }
-    }
-
-    pub fn dirty(&self) -> bool {
-        self.edited != *self.saved
     }
 }
 
@@ -574,6 +551,66 @@ impl Model {
         out
     }
 
+    /// What the wallpaper should be held to while the draft is open, as `dev.json` says it:
+    /// the values that differ from what is saved, and the keys the draft has given back to
+    /// reality although the saved profile fixes them.
+    pub fn overrides(&self) -> (serde_json::Map<String, serde_json::Value>, Vec<String>) {
+        use serde_json::json;
+        let (e, s) = (&self.draft.edited, &*self.draft.saved);
+        let mut set = serde_json::Map::new();
+        let mut auto = Vec::new();
+        if e.view != s.view {
+            set.insert("view".into(), json!(e.view));
+        }
+        if e.mode != s.mode {
+            set.insert("mode".into(), json!(e.mode));
+        }
+        for (key, a, b) in [("birds", e.rates.birds, s.rates.birds), ("meteors", e.rates.meteors, s.rates.meteors), ("planes", e.rates.planes, s.rates.planes)] {
+            if a != b {
+                set.insert(key.into(), json!(a));
+            }
+        }
+        if e.scene.time != s.scene.time {
+            match e.scene.time {
+                Source::Fixed(c) => {
+                    set.insert("time".into(), json!(c.0 as f64 / 60.0));
+                }
+                Source::Auto => auto.push("time".to_string()),
+            }
+        }
+        if e.scene.date != s.scene.date {
+            match e.scene.date {
+                Source::Fixed(d) => {
+                    set.insert("day".into(), json!(self.day_offset(d)));
+                }
+                Source::Auto => auto.push("day".to_string()),
+            }
+        }
+        for c in Channel::ALL {
+            if e.scene.get(c) != s.scene.get(c) {
+                match e.scene.get(c) {
+                    Source::Fixed(v) => {
+                        set.insert(c.key().into(), json!(v));
+                    }
+                    Source::Auto => auto.push(c.key().to_string()),
+                }
+            }
+        }
+        for k in self.view().knobs() {
+            let now = e.views.get(self.view().id()).and_then(|m| m.get(k.key));
+            let was = s.views.get(self.view().id()).and_then(|m| m.get(k.key));
+            if now != was {
+                match now {
+                    Some(v) => {
+                        set.insert(k.key.into(), json!(v));
+                    }
+                    None => auto.push(k.key.to_string()),
+                }
+            }
+        }
+        (set, auto)
+    }
+
     pub fn peeking(&self) -> bool {
         self.pinned || self.capture.is_some() || self.now < self.peek_until
     }
@@ -617,23 +654,23 @@ impl Model {
                 Vec::new()
             }
             Action::FocusStep(d) => {
-                let list = self.fields(self.category);
-                if let Some(n) = list.len().checked_sub(0).filter(|n| *n > 0) {
-                    let at = list.iter().position(|f| *f == self.focus).unwrap_or(0) as i32;
-                    self.focus = list[(at + d).rem_euclid(n as i32) as usize];
-                    self.remembered.insert(self.category, self.focus);
+                // one list of every control, category after category
+                let cats = self.categories();
+                let mut all: Vec<Field> = Vec::new();
+                for c in &cats {
+                    all.extend(self.fields(*c));
+                }
+                if !all.is_empty() {
+                    let at = all.iter().position(|f| *f == self.focus).unwrap_or(0) as i32;
+                    let to = all[(at + d).rem_euclid(all.len() as i32) as usize];
+                    self.category = to.category();
+                    self.focus = to;
+                    self.remembered.insert(self.category, to);
                 }
                 Vec::new()
             }
             Action::Category(c) => {
                 self.set_category(c);
-                Vec::new()
-            }
-            Action::CategoryStep(d) => {
-                let cats = self.categories();
-                let at = cats.iter().position(|c| *c == self.category).unwrap_or(0) as i32;
-                let next = cats[(at + d).rem_euclid(cats.len() as i32) as usize];
-                self.set_category(next);
                 Vec::new()
             }
             Action::Adjust(f, steps) => self.step(f, steps, false),
@@ -815,11 +852,27 @@ impl Model {
             Err(e) => {
                 // the draft, the focus and any exit that was asked for are kept exactly as they were
                 self.exit_after_save = false;
-                let tail = match &e {
-                    SaveError::Io { recovery: Recovery::Partial, .. } => " Check config.toml and the persisted view before saving again.",
-                    _ => " Your changes are still here.",
+                let said = match &e {
+                    SaveError::Io { why, recovery } => {
+                        let tail = match recovery {
+                            Recovery::Untouched => "Nothing was changed; your edits are still here.",
+                            Recovery::RolledBack => "The earlier write was put back; your edits are still here.",
+                            Recovery::Partial => "The files may be half updated: check config.toml and the saved view, then Save again.",
+                        };
+                        format!("{} {}", why, tail)
+                    }
+                    other => format!("{} Your edits are still here.", other),
                 };
-                self.status = Status::Failed(format!("Not saved: {}.{}", e, tail));
+                // the operating system's error number says nothing useful here
+                let said = said.replace(|c: char| c == '\n', " ");
+                let said = match said.find(" (os error ") {
+                    Some(i) => match said[i..].find(')') {
+                        Some(j) => format!("{}{}", &said[..i], &said[i + j + 1..]),
+                        None => said,
+                    },
+                    None => said,
+                };
+                self.status = Status::Failed(format!("Not saved: {}", said));
                 Vec::new()
             }
         }
@@ -1240,7 +1293,7 @@ mod tests {
         assert!(m.dirty());
         assert_eq!((m.category, m.focus), (Category::Machine, Field::Channel(Channel::Load)));
         match &m.status {
-            Status::Failed(s) => assert!(s.contains("permission denied") && s.contains("still here"), "{}", s),
+            Status::Failed(s) => assert!(s.contains("permission denied") && s.contains("still here") && s.starts_with("Not saved: "), "{}", s),
             other => panic!("{:?}", other),
         }
         // and a later successful save is what says Saved
@@ -1400,6 +1453,27 @@ mod tests {
         assert_eq!(m.dispatch(Action::Discard), vec![Effect::Publish]);
         assert!(!m.dirty());
         assert_eq!(m.draft.edited.scene.get(Channel::Rain), Source::Auto);
+    }
+
+    #[test]
+    fn overrides_carry_only_what_differs_and_what_was_given_back() {
+        let mut saved = RuntimeSettings::default();
+        saved.scene.fix(Channel::Fog, 30.0);
+        saved.scene.time = Source::Fixed(Clock::new(8, 0).unwrap());
+        let mut m = test_model();
+        m.draft = Draft::new(Arc::new(saved));
+        let (set, auto) = m.overrides();
+        assert!(set.is_empty() && auto.is_empty(), "an untouched draft holds nothing of its own");
+        m.dispatch(Action::SetValue(Field::Channel(Channel::Rain), 55.0));
+        m.dispatch(Action::SetAuto(Field::Channel(Channel::Fog)));
+        m.dispatch(Action::SetValue(Field::Time, 22.5));
+        m.dispatch(Action::SetValue(Field::Birds, 2.0));
+        let (set, auto) = m.overrides();
+        assert_eq!(set.get("rain").and_then(|v| v.as_f64()), Some(55.0));
+        assert_eq!(set.get("time").and_then(|v| v.as_f64()), Some(22.5));
+        assert_eq!(set.get("birds").and_then(|v| v.as_f64()), Some(2.0));
+        assert_eq!(auto, vec!["fog".to_string()]);
+        assert!(!set.contains_key("fog"));
     }
 
     #[test]

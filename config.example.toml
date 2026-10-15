@@ -39,7 +39,10 @@ planes = 1.0
 stories = true           # incidents and daily life in the developed views
 
 # Inputs follow reality unless fixed here. Leave a key out and it stays live.
-# Saving from `dormer dev` writes these; so can you.
+# Saving from `dormer dev` writes these; so can you. A running `dormer live`
+# follows changes to this file without a restart, except [place], [wallpaper],
+# [weather], [house], [power], [dev], and [look] seed/size/top_*, which are read
+# at start.
 [scene]
 # time = "21:30"         # a fixed local time of day (HH:MM)
 # date = "2026-10-15"    # a fixed calendar date (YYYY-MM-DD); the time of day keeps moving

@@ -9,23 +9,38 @@ impl RuntimeSettings {
     /// Put the saved profile on top of the real inputs in `moment`: fixed sources replace what
     /// was read, `Auto` leaves the real reading alone. Dev-panel drafts and command-line
     /// arguments are laid over this afterwards.
+    #[cfg(test)]
     pub fn apply(&self, moment: &mut Moment) -> Result<(), SettingsError> {
+        self.apply_except(moment, &[])
+    }
+
+    /// The same, leaving out the named inputs (dev.json keys: `time`, `day`, a channel's
+    /// `key()` or a knob's key) that a draft has handed back to reality.
+    pub fn apply_except(&self, moment: &mut Moment, skip: &[String]) -> Result<(), SettingsError> {
+        let skipped = |key: &str| skip.iter().any(|s| s == key);
         moment.rates = crate::scene::Rates { birds: self.rates.birds, meteors: self.rates.meteors, planes: self.rates.planes };
-        self.apply_clock(moment)?;
+        let mut clock = self.clone();
+        if skipped("time") {
+            clock.scene.time = Source::Auto;
+        }
+        if skipped("day") {
+            clock.scene.date = Source::Auto;
+        }
+        clock.apply_clock(moment)?;
         let mut held = Map::new();
         for channel in Channel::ALL {
-            if let Source::Fixed(v) = self.scene.get(channel) {
+            if let (Source::Fixed(v), false) = (self.scene.get(channel), skipped(channel.key())) {
                 held.insert(channel.key().to_string(), json!(v));
             }
         }
         // the view's saved knobs, kept to what the view says they may be
         for (key, v) in self.knobs(moment.view.id()) {
-            if let Some(k) = moment.view.knobs().iter().find(|k| k.key == key) {
+            if let Some(k) = moment.view.knobs().iter().find(|k| k.key == key && !skipped(k.key)) {
                 moment.knobs.retain(|(name, _)| name != key);
                 moment.knobs.push((key.to_string(), v.clamp(k.lo, k.hi)));
             }
         }
-        let weather = Channel::ALL.iter().any(|c| !c.is_machine() && self.scene.get(*c).is_fixed());
+        let weather = Channel::ALL.iter().any(|c| !c.is_machine() && self.scene.get(*c).is_fixed() && !skipped(c.key()));
         crate::with_overrides(&held, moment);
         if weather {
             moment.wx.note = "saved settings";
@@ -56,12 +71,6 @@ impl RuntimeSettings {
         moment.ts = ts;
         moment.bent = true;
         Ok(())
-    }
-}
-
-impl super::Settings {
-    pub fn apply(&self, moment: &mut Moment) -> Result<(), SettingsError> {
-        self.runtime.apply(moment)
     }
 }
 

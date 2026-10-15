@@ -33,15 +33,8 @@ impl<T> Default for Source<T> {
     }
 }
 
-impl<T: Copy> Source<T> {
-    pub fn fixed(self) -> Option<T> {
-        match self {
-            Source::Fixed(v) => Some(v),
-            Source::Auto => None,
-        }
-    }
-
-    pub fn is_fixed(self) -> bool {
+impl<T> Source<T> {
+    pub fn is_fixed(&self) -> bool {
         matches!(self, Source::Fixed(_))
     }
 }
@@ -180,10 +173,6 @@ impl Channel {
         }
     }
 
-    pub fn from_key(key: &str) -> Option<Channel> {
-        Channel::ALL.into_iter().find(|c| c.key() == key)
-    }
-
     /// The key in `config.toml`.
     pub fn toml_key(self) -> &'static str {
         match self {
@@ -270,11 +259,6 @@ impl SceneSources {
 
     pub fn release(&mut self, channel: Channel) {
         self.values[channel.index()] = Source::Auto;
-    }
-
-    /// How many inputs are held.
-    pub fn fixed_count(&self) -> usize {
-        self.time.is_fixed() as usize + self.date.is_fixed() as usize + self.values.iter().filter(|v| v.is_fixed()).count()
     }
 }
 
@@ -549,11 +533,6 @@ pub fn reload() -> Result<bool, SettingsError> {
     GLOBAL.reload(&crate::sources::config_path())
 }
 
-/// Replace the snapshot with one the caller has already validated (a successful Save).
-pub fn adopt(settings: RuntimeSettings) -> Arc<RuntimeSettings> {
-    GLOBAL.set(settings)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,7 +541,6 @@ mod tests {
     fn defaults_are_all_auto() {
         let s = RuntimeSettings::parse("").unwrap();
         assert_eq!(s, RuntimeSettings::default());
-        assert_eq!(s.scene.fixed_count(), 0);
         assert!(Channel::ALL.iter().all(|c| s.scene.get(*c) == Source::Auto));
         assert!(s.interactive && s.stories && s.fps == 30);
     }
@@ -581,7 +559,7 @@ mod tests {
         // what was not written stays automatic, so real readings keep flowing
         assert_eq!(s.scene.get(Channel::Snow), Source::Auto);
         assert_eq!(s.scene.get(Channel::Containers), Source::Auto);
-        assert_eq!(s.scene.fixed_count(), 6);
+        assert_eq!(Channel::ALL.iter().filter(|c| s.scene.get(**c).is_fixed()).count(), 4);
     }
 
     #[test]

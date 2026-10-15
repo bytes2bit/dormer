@@ -110,6 +110,7 @@ fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, SaveError> {
 
 /// Things a test can make fail on purpose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // only the tests construct the faults
 pub enum Fault {
     None,
     /// removing the persisted view choice fails
@@ -140,16 +141,14 @@ impl ConfigFile {
         Ok(ConfigFile { path: path.to_path_buf(), view_file: view_file.to_path_buf(), opened: fingerprint(bytes.as_deref()), revision: 0, fault: Fault::None })
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
     /// Has anything else written the file since it was opened or last saved?
+    #[cfg(test)]
     pub fn changed_outside(&self) -> bool {
         read_optional(&self.path).map_or(true, |b| fingerprint(b.as_deref()) != self.opened)
     }
 
     /// Accept what is on disk now as the baseline (the user chose to reload).
+    #[cfg(test)]
     pub fn rebase(&mut self) -> Result<(), SaveError> {
         let bytes = read_optional(&self.path)?;
         if let Some(b) = &bytes {
@@ -190,13 +189,13 @@ impl ConfigFile {
         let backup = match &before {
             Some(old) => {
                 let b = backup_path(&target);
-                write_atomic(&b, old, None).map_err(|e| io(format!("cannot keep a backup at {}: {}", b.display(), e), Recovery::Untouched))?;
+                write_atomic(&b, old, None).map_err(|e| io(format!("cannot keep a backup ({}): {}", name_of(&b), e), Recovery::Untouched))?;
                 Some(b)
             }
             None => None,
         };
         let permissions = fs::metadata(&target).ok().map(|m| m.permissions());
-        write_atomic(&target, text.as_bytes(), permissions).map_err(|e| io(format!("cannot write {}: {}", target.display(), e), Recovery::Untouched))?;
+        write_atomic(&target, text.as_bytes(), permissions).map_err(|e| io(format!("cannot write {}: {}", name_of(&target), e), Recovery::Untouched))?;
 
         // the persisted view choice outranks look.view, so it has to agree with what was saved
         let mut cleared = false;
@@ -238,6 +237,11 @@ impl ConfigFile {
             Err(e) => io(format!("{}; and the config could not be put back: {}", why, e), Recovery::Partial),
         }
     }
+}
+
+/// The file's own name: the panel already says which directory it is in.
+fn name_of(path: &Path) -> String {
+    path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
 
 fn io(why: String, recovery: Recovery) -> SaveError {

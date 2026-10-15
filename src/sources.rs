@@ -392,6 +392,12 @@ pub fn theme_mode() -> String {
     if ok(&saved.mode) {
         return saved.mode.clone();
     }
+    desktop_mode()
+}
+
+/// dark or light as the desktop says, whatever the settings choose.
+pub fn desktop_mode() -> String {
+    let ok = |m: &str| m == "dark" || m == "light";
     let mut mode = std::env::var("NOCTALIA_THEME_MODE").unwrap_or_default();
     if !ok(&mode) && which("noctalia").is_some() {
         if let Some((_, out, _)) = run(&["noctalia", "msg", "theme-mode-get"], 4.0) {
@@ -486,15 +492,23 @@ pub fn live_pid() -> i64 {
     }
 }
 
-/// What the dev panel (or the tour) is holding the scene to, while it is running.
-pub fn overrides() -> serde_json::Map<String, Value> {
+/// What the dev panel (or the tour) is holding the scene to, while it is running: the values
+/// it sets, and the keys it gives back to reality although the saved profile fixes them.
+pub fn dev_state() -> (serde_json::Map<String, Value>, Vec<String>) {
     let path = cache_file("dev.json");
     let Some(data) = read_json(&path) else { return Default::default() };
     if !alive(data.get("pid").and_then(|p| p.as_i64()).unwrap_or(0), &["dormer"]) {
         let _ = fs::remove_file(&path); // it died without tidying up
         return Default::default();
     }
-    data.get("set").and_then(|s| s.as_object()).cloned().unwrap_or_default()
+    let set = data.get("set").and_then(|s| s.as_object()).cloned().unwrap_or_default();
+    let auto = data.get("auto").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|k| k.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    (set, auto)
+}
+
+/// What the dev panel (or the tour) is setting, while it is running.
+pub fn overrides() -> serde_json::Map<String, Value> {
+    dev_state().0
 }
 
 // ── putting the picture on the screen ────────────────────────────────────────

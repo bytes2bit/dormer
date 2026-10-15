@@ -49,7 +49,10 @@ with the README and `dormer explain`.
 | `src/pointer.rs` | Seat/pointer focus and cursor resources, including the software cursor fallback. |
 | `src/buffer.rs` | Pixel-exact stale/damage restoration and visibility/resume decisions. |
 | `src/wl.rs` | Per-monitor Wayland surfaces, shared-memory double buffers, scaling, crossfades, visibility/power pacing, signals and file watches; headless `one_frame`. |
-| `src/dev.rs` | Terminal slider panel; transient time/weather/machine/view overrides. |
+| `src/settings/mod.rs` | `RuntimeSettings`: the validated, immutable snapshot of `config.toml` (`Source::{Auto,Fixed}` inputs, activity rates, per-view knobs); `runtime()`/`reload()` swap whole snapshots. |
+| `src/settings/profile.rs` | Laying the saved profile over a `Moment` in system-local time (`apply_except` honours inputs a panel draft hands back to reality). |
+| `src/settings/file.rs` | `ConfigFile::save`: `toml_edit` round-trip, conflict detection, backup, atomic write, reconciling the persisted `view` file with rollback. |
+| `src/dev.rs`, `src/dev/` | Settings panel shell (terminal, event loop, saving, preview via `dev.json`) and its `model`, `input`, `layout`, `render`. |
 | `src/words.rs` | `dormer explain`: shared sky descriptions plus each view's words. |
 
 The registered view IDs are `rooftops` (`rooftops.rs`), `street` (`street.rs`),
@@ -140,15 +143,20 @@ Paths honor XDG variables, with the usual home-directory defaults:
 
 | Location | Contents |
 | --- | --- |
-| `$XDG_CONFIG_HOME/dormer/config.toml` (`~/.config/...`) | Optional TOML settings, loaded once per process with `OnceLock`. Restart to reload config. |
+| `$XDG_CONFIG_HOME/dormer/config.toml` (`~/.config/...`) | Optional TOML settings. Integration settings (`sources::config()`: place, backend, weather, house, power, dev, seed/size/top colours) are read once per process; the editable ones (`settings::runtime()`) are reloaded by the live layer when the file changes. |
 | `$XDG_STATE_HOME/dormer/view` (`~/.local/state/...`) | Persistent `dormer view` choice; takes precedence over `[look].view`. |
 | `$XDG_CACHE_HOME/dormer/` (`~/.cache/...`) | `state.json`, alternating `frame-a/b.png`, draw `lock`, weather cache, `pretend.json`, `dev.json`, `live.pid`. |
 | `$XDG_CONFIG_HOME/systemd/user/` | Three units written by `dormer install`: still service/timer and live service. |
 
 Config settings cover place, look, wallpaper, weather, house, live FPS, power
-hold file, and dev terminal. Missing settings fall back to defaults. Invalid
-TOML currently falls back to a default table. See `sources::config` for actual
-behavior and keep `config.example.toml` in sync when adding settings.
+hold file, dev terminal, activity rates, fixed scene inputs (`[scene]`,
+`[scene.simulated_machine]`) and per-view knobs (`[views.NAME]`). Missing
+settings fall back to defaults. Invalid *values* make `settings::RuntimeSettings`
+refuse the whole file: at start dormer says so on stderr and uses the built-in
+defaults; a running live layer keeps its previous snapshot. See
+`sources::config` and `settings` for actual behavior and keep
+`config.example.toml` in sync when adding settings. Precedence, lowest first:
+real inputs, saved profile, dev draft (`dev.json` `set` and `auto`), CLI flags.
 
 Pointer events are native Wayland seat events on exposed wallpaper surfaces;
 there is no global mouse polling or keyboard capture. `Screen` owns its
@@ -159,12 +167,17 @@ cooldown. Hover settles; paused/covered/sleeping outputs ignore new input.
 Maintain immediate stale-output rebuild on wake independently of the global
 scene age, and preserve crossfades for visible view changes.
 
-The dev panel groups controls into Time/Weather/Machine/Motion/Scene, accepts
-incrementally decoded keyboard/SGR mouse events, and locks a dragged slider
-until release. It batches parameter writes at most 30 times per second. On
-Hyprland its own terminal floats, shrinks and fades during adjustment, with
-blur disabled for the preview; `--here` preserves the host terminal's opacity.
-The still-painter worker sleeps on a bounded channel instead of idle polling.
+The panel edits a `Draft` (saved snapshot vs edited copy) in `dev/model.rs`;
+every key and mouse event becomes an `Action`, and `Model::dispatch` returns
+`Effect`s (publish, save, reload, exit) that `dev.rs` performs. Layout and hit
+testing share one `Layout`; a dragged slider is captured by its control id and
+original cells until release, cancelled by resize or focus loss. Parameter
+writes to `dev.json` are batched at most 30 times a second. On Hyprland its own
+terminal floats and fades (opacity and blur only, never resized) during
+adjustment; `--here` preserves the host terminal's opacity. The still-painter
+worker sleeps on a bounded channel and the event loop has no idle timer other
+than the 20-second reality refresh. `tests/dev_panel.py` drives all of this
+through a real PTY.
 
 Weather `auto` tries Noctalia's cached reading/location, then Open-Meteo via
 `curl` if it has a location and no usable reading. Explicit place coordinates

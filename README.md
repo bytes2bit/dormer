@@ -71,24 +71,59 @@ Coordinates use the 1600x1000 design space. `--seconds` sets how far the
 simulation runs after the click. PNG exports still read your config and weather
 sources; see `AGENTS.md` for an isolated, offline preview setup.
 
-## Scene controls
+## Settings panel
 
-`dormer dev` opens a compact panel over the wallpaper. Click a view name, then
-choose Time, Weather, Machine, Motion, or Scene. Tab moves between groups;
-the number keys select them directly. Arrow keys select and adjust a control,
-the mouse wheel changes its value, and sliders can be clicked or dragged.
-Shift-arrow or Page Up/Down takes larger steps.
+`dormer dev` opens a panel over the wallpaper where you choose a view, adjust
+it while you watch the scene, and save what should stay.
 
-While adjusting, the dedicated panel fades and shows just the selected slider,
-leaving the scene in view. It returns when you release the slider or stop
-pressing adjustment keys. Press `p` to keep the compact preview open. On
-Hyprland the dedicated panel floats and fades; Ghostty also has a translucent
-background. `dev --here` uses the current terminal's own opacity settings.
+A header says where you stand, in words: **Saved**, **Unsaved changes (3)**,
+**Preview only**, **Saving…**, or **Not saved** with the reason. Views are
+across the top; the sections are *Appearance*, *Sky & weather*, *Machine
+preview*, *Activity* and, for views that have them, *This view*. Click a name,
+or press `1`–`5`.
 
-The mark on a slider shows its real value, and amber marks a held override.
-`r` resets one control, `a` resets all, `n` restores the current time/date,
-and `q` closes the panel and restores reality. Changes are temporary and
-updates are combined while dragging; they are not saved to your config.
+Every input of the sky and the house is either **auto** (it follows the real
+time, weather and machine) or **fixed** (held at the value you chose). Moving a
+control fixes it; `a` or the `[fixed]` tag gives it back. Machine values you fix
+are simulations (a pretend agent session, pretend load), and the save summary
+names them.
+
+| Keys | |
+| --- | --- |
+| `↑ ↓` `Tab` `Shift-Tab` | choose a control |
+| `← →` `h l` | adjust (`Shift`, `[` `]` or Page Up/Down: larger steps) |
+| `Enter` | type a value (`21:30`, `2026-10-15`, `40%`, `auto`); `Esc` cancels |
+| `Space` | switch on/off, or fix / give back to auto |
+| `a` `n` `r` `d` | auto · time and date to now · reset to saved · discard all |
+| `s` or `Ctrl-S` | save to `config.toml` |
+| `p` `?` `q` | pin the preview · help · quit (asks if unsaved) |
+
+With the mouse, click or drag a slider (letting go anywhere ends the drag), use
+the wheel to scroll the list, and click `[Save]`, `[Discard]`, `[Reset]`,
+`[Preview]`, `[Help]` or `[Quit]` (a button fires when you release on it).
+
+While you hold a slider the dedicated panel fades and shows only that control,
+in the same place, leaving the scene in view; it never resizes or moves.
+On Hyprland the dedicated panel floats and fades; `dev --here` uses the current
+terminal's own opacity settings.
+
+### What Save does
+
+Save writes your edits into `config.toml`, keeping its comments, key order,
+unknown keys and permissions, through a temporary file in the same directory
+and a `config.toml.bak` of what was there. It refuses to overwrite a file that
+changed since the panel opened it: you can reload (your edits stay on top of
+the new file) or overwrite on purpose. If the write fails, nothing is changed
+and your edits stay in the panel. A view you chose earlier with `dormer view`
+outranks `[look] view`; saving a view clears that choice so the saved one wins.
+
+A running `dormer live` notices the saved file and follows it without a
+restart (frame rate, mouse reactions, view, fixed inputs). Closing the panel
+removes only the transient preview: what you saved stays in force.
+
+Order of precedence, lowest first: the real world, your saved `config.toml`
+(`[scene]`, `[activity]`, `[views.NAME]`), the panel's unsaved draft, then
+explicit command-line flags such as `--weather` or `--at`.
 
 ## What the sky is telling you
 
@@ -182,7 +217,7 @@ not running. `dormer install --no-live` keeps only the still frames.
 | `dormer draw --out a.png --at "2026-12-31 23:50"` | Draw another moment to a file. |
 | `dormer sheet out.png "2026-10-13 07:10,city" "2026-10-13 21:00,storm,coast"` | Several moments on one sheet. |
 | `dormer hold on` / `off` | Freeze or release the living wallpaper (for a lock screen's hooks). |
-| `dormer dev` | A floating panel: choose the view, then sliders for every input, and the view's own knobs. The wallpaper follows as you drag. |
+| `dormer dev` | The settings panel: choose the view, adjust every input and the view's own knobs while the wallpaper follows, and save what should stay. |
 | `dormer doctor` | Show what is in effect on this machine. |
 
 ## What it costs
@@ -230,7 +265,9 @@ implemented from their documentation and have not been tested.
 - `live.rs` simulates what is in the air, and animates whatever a view points
   at while painting: a chimney here, a television behind that window, a
   beacon there. `wl.rs` puts it on a layer surface.
-- `dev.rs` is the panel. `dormer soak` draws thousands of random moments in
+- `settings/` is the saved configuration as a typed snapshot (fixed or auto
+  inputs, activity rates, per-view knobs) and its comment-preserving writer;
+  `dev.rs` and `dev/` are the panel. `dormer soak` draws thousands of random moments in
   every view to shake out faults; `cargo test` checks the sky and the hours
   people keep.
 

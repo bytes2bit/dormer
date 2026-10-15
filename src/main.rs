@@ -153,12 +153,23 @@ pub fn with_overrides(dev: &Map<String, Value>, m: &mut Moment) {
             m.knobs.push((k.key.to_string(), v));
         }
     }
+    if let Some(mode) = dev.get("mode").and_then(|v| v.as_str()) {
+        match mode {
+            "dark" | "light" => m.mode = mode.to_string(),
+            "auto" => m.mode = sources::desktop_mode(),
+            _ => {}
+        }
+    }
+    // days and clock times are calendar days and wall-clock times, whatever daylight saving did
     if let Some(day) = f("day") {
-        m.ts += day * 86400.0;
+        let l = tm::local(m.ts);
+        m.ts = tm::stamp(l.year, l.month, l.mday + day.round() as i32, l.hour, l.min, l.sec);
         m.bent = true;
     }
     if let Some(time) = f("time") {
-        m.ts = tm::midnight(m.ts) + time * 3600.0;
+        let l = tm::local(m.ts);
+        let minutes = (time * 60.0).round() as i32;
+        m.ts = tm::stamp(l.year, l.month, l.mday, minutes.div_euclid(60), minutes.rem_euclid(60), 0);
         m.bent = true;
     }
     if ["cover", "rain", "snow", "fog", "storm", "wind", "wdir", "temp", "humidity", "rain_in"].iter().any(|k| dev.contains_key(*k)) {
@@ -244,12 +255,12 @@ pub fn raw_moment(mode: Option<&str>) -> Moment {
 
 /// Lay the saved profile, then the dev panel's draft, over a raw moment.
 pub fn settle(m: &mut Moment, overrides: bool) {
-    if let Err(e) = settings::runtime().apply(m) {
+    let (set, auto) = if overrides { sources::dev_state() } else { Default::default() };
+    // keys the panel has given back to reality are not taken from the saved profile either
+    if let Err(e) = settings::runtime().apply_except(m, &auto) {
         eprintln!("dormer: saved settings not applied: {}", e);
     }
-    if overrides {
-        with_overrides(&sources::overrides(), m);
-    }
+    with_overrides(&set, m);
 }
 
 /// This moment as the world has it, with the saved profile and any overrides laid on top.

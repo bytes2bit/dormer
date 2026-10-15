@@ -62,17 +62,6 @@ impl Button {
             Button::Quit => "Quit",
         }
     }
-
-    pub fn key(self) -> char {
-        match self {
-            Button::Save => 's',
-            Button::Discard => 'd',
-            Button::Reset => 'r',
-            Button::Preview => 'p',
-            Button::Help => '?',
-            Button::Quit => 'q',
-        }
-    }
 }
 
 /// Everything on the screen that answers to the mouse.
@@ -113,7 +102,6 @@ pub struct Layout {
     pub size: (u16, u16),
     /// categories down the left side, rather than as tabs
     pub wide: bool,
-    pub header: CellRect,
     pub tabs: Vec<(CellRect, usize)>,
     pub cats: Vec<(CellRect, Category)>,
     pub rows: Vec<Row>,
@@ -155,7 +143,6 @@ impl Layout {
         let inner = cols.saturating_sub(margin * 2).max(1);
         let mut targets: Vec<(CellRect, ControlId)> = Vec::new();
 
-        let header = CellRect::new(0, 0, cols, 1);
         let mut y = 1u16;
 
         // the buttons and the status are fixed to the bottom, whatever else gives way
@@ -232,9 +219,12 @@ impl Layout {
         let (label_w, value_w, tag_w): (u16, u16, u16) = if list_w >= 70 {
             (18, 20, 7)
         } else if list_w >= 54 {
-            (16, 16, 7)
+            (16, 18, 7)
+        } else if list_w >= 44 {
+            (13, 11, 6)
         } else {
-            (12, 11, 6)
+            // 40 columns: a short bar still beats none; the tag loses its brackets
+            (11, 9, 5)
         };
         // the last column of the list belongs to the scroll arrows
         let edge = (list_x + list_w).saturating_sub(1);
@@ -248,7 +238,7 @@ impl Layout {
             let value = CellRect::new(edge.saturating_sub(tag_space + value_w), ry, value_w, 1);
             let bar_x = label.right() + 1;
             let bar_w = value.x.saturating_sub(bar_x + 1);
-            let bar = (info.shape == Shape::Slider && bar_w >= 6).then(|| CellRect::new(bar_x, ry, bar_w, 1));
+            let bar = (info.shape == Shape::Slider && bar_w >= 4).then(|| CellRect::new(bar_x, ry, bar_w, 1));
             rows.push(Row { field: *field, y: ry, label, bar, value, source, shape: info.shape });
         }
 
@@ -318,7 +308,7 @@ impl Layout {
         // a rectangle that does not fit the terminal is not a target: it cannot be seen
         targets.retain(|(r, _)| r.within(size));
 
-        Layout { size, wide, header, tabs, cats, rows, list, first, total, detail, status, buttons, dialog, targets }
+        Layout { size, wide, tabs, cats, rows, list, first, total, detail, status, buttons, dialog, targets }
     }
 
     /// The control at a cell, nearest first.
@@ -335,7 +325,8 @@ impl Layout {
         self.rows.iter().find(|r| r.field == field)
     }
 
-    /// Every target, for tests and the renderer's bounds checks.
+    /// Every target, for tests.
+    #[cfg(test)]
     pub fn targets(&self) -> &[(CellRect, ControlId)] {
         &self.targets
     }
