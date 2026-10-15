@@ -10,9 +10,6 @@
 //! ticks (a held or hidden output simply is not stepped, and a long gap is one
 //! frame's worth, not a catch-up), and everything below runs on those ticks.
 //!
-//! The pieces are wired in one at a time; until the last of them is, some are not yet used.
-#![allow(dead_code)]
-
 pub mod actors;
 pub mod behaviors;
 pub mod director;
@@ -22,17 +19,17 @@ pub mod model;
 pub mod physics;
 pub mod replay;
 
-pub use actors::{ActorCommand, ActorSpec, ActorSystem};
+pub use actors::ActorSystem;
 pub use director::{Facts, TriggerResult};
 pub use model::*;
 pub use physics::Gesture;
 
-use actors::actor_source;
 use behaviors::{Behavior, BehaviorContext, Command, CommandBuffer, MINE};
 use director::{Change, Director, Parts};
 use events::{EventBus, EventKind, SimClock};
-use physics::{BodyKind, Physics};
+use physics::Physics;
 
+#[cfg(test)]
 use crate::gfx::P;
 
 /// A rectangle of the design space (1600 by 1000) that the base picture must repaint.
@@ -148,14 +145,6 @@ impl StoryWorld {
 
     pub fn definition(&self) -> &Definition {
         &self.definition
-    }
-
-    pub fn limits(&self) -> &Limits {
-        &self.limits
-    }
-
-    pub fn seed(&self) -> u64 {
-        self.seed
     }
 
     pub fn actors(&self) -> &ActorSystem {
@@ -283,11 +272,6 @@ impl StoryWorld {
             self.tick_once();
         }
         n
-    }
-
-    /// The same with the sky and the hour read from the scene.
-    pub fn step(&mut self, dt: f64, scene: &crate::scene::Scene) -> u32 {
-        self.step_facts(dt, &facts_of(scene))
     }
 
     /// Bring the world up to date after `dt` seconds of wall time. A long gap on a visible
@@ -543,6 +527,7 @@ impl StoryWorld {
     }
 
     /// Where an object is, at its resting place plus its displacement.
+    #[cfg(test)]
     pub fn place(&self, id: ObjectId) -> Option<P> {
         let d = self.definition.object(id)?;
         let s = self.objects.get(id)?;
@@ -554,10 +539,6 @@ impl StoryWorld {
         &self.physics.bodies
     }
 
-    /// Source of an actor's own events, for tests and the replay trace.
-    pub fn source_of(&self, id: ActorId) -> ObjectId {
-        actor_source(id)
-    }
 }
 
 fn damage_rank(d: Damage) -> u8 {
@@ -602,3 +583,5 @@ pub const LIGHT_MARGIN: f32 = 26.0;
 mod tests;
 #[cfg(test)]
 mod render_tests;
+#[cfg(test)]
+mod acceptance;

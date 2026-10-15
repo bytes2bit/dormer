@@ -541,8 +541,6 @@ pub struct Director {
     pub peak_instructions: usize,
     /// the times a tick used up its whole budget and had to carry on at the next
     pub yielded: u64,
-    /// the diagnostic of a story that was stopped for breaking its limits
-    pub diagnostics: Vec<String>,
     max_instructions: usize,
     max_incidents: usize,
     max_escalations: u8,
@@ -558,7 +556,6 @@ impl Director {
             quiet_until: 0,
             peak_instructions: 0,
             yielded: 0,
-            diagnostics: Vec::new(),
             max_instructions: limits.instructions,
             max_incidents: limits.incidents,
             max_escalations: limits.escalations as u8,
@@ -586,6 +583,7 @@ impl Director {
         self.runs.iter().filter(|r| defs.stories.get(r.story).is_some_and(|s| s.class == Class::Incident)).count()
     }
 
+    #[cfg(test)]
     pub fn active(&self) -> bool {
         !self.runs.is_empty()
     }
@@ -722,15 +720,6 @@ impl Director {
                 }
             }
         }
-    }
-
-    /// Stop everything: a reset, or a view going away.
-    pub fn abort_all(&mut self, p: &mut Parts) {
-        let runs = std::mem::take(&mut self.runs);
-        for r in &runs {
-            self.release(r, p);
-        }
-        self.ambient_due.clear();
     }
 
     /// Heard of an event: waits on events and the escalation rules take note.
@@ -1089,11 +1078,7 @@ impl Director {
             .collect()
     }
 
-    /// Does this story hold any actors or reservations right now?
-    pub fn holds_resources(&self, p: &Parts) -> bool {
-        self.runs.iter().any(|r| r.actors.iter().flatten().count() > 0) || p.actors.reservation_count() > 0
-    }
-
+    #[cfg(test)]
     pub fn run_count(&self) -> usize {
         self.runs.len()
     }

@@ -72,7 +72,6 @@ const CAT_WALL: u16 = 35;
 
 const AREA_WATER: AreaId = AreaId(1);
 
-pub const STORIES: [&str; 6] = ["loose_mooring", "lighthouse_fault", "cargo_overboard", "dock_delivery", "keeper_meeting", "keeper_round"];
 
 const S0: Slot = Slot(0);
 const S1: Slot = Slot(1);

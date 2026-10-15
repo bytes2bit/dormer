@@ -5,7 +5,7 @@
 //! streets. The view finds where these are and passes them as
 //! `CityBindings`; this file says what happens to them.
 
-use crate::color::{shade, Rgb};
+use crate::color::shade;
 use crate::gfx::{Draw, Surface, P};
 use crate::props::Layout;
 use crate::story::actors::{ActorPose, ActorSpec, Kind, Mode, Role, RouteGraph};
@@ -74,10 +74,8 @@ const WIN_B: u16 = 45;
 const FAR_ROOF: u16 = 46;
 
 const AREA_PLATFORM: AreaId = AreaId(1);
-const AREA_TOP: AreaId = AreaId(2);
 const AREA_BOX: AreaId = AreaId(3);
 
-pub const STORIES: [&str; 6] = ["station_signal", "crane_snag", "local_power", "passenger_visit", "staff_exchange", "station_inspection"];
 
 /// Where the train stops short, as the x of its nose.
 pub fn stop_nose(b: &CityBindings) -> f32 {

@@ -12,10 +12,10 @@ use crate::gfx::{Draw, Surface, P};
 use crate::props::Layout;
 use crate::story::actors::{ActorPose, Kind, Mode, Role, RouteGraph};
 use crate::story::behaviors::{repair, round, visit, Animal, BehaviorSpec, CrewJob, Occupant, Perch, Walker};
-use crate::story::director::{Change, Class, Cond, Slot, Step, Stage, StoryDef, Test, Trigger, Until, Weather};
+use crate::story::director::{Change, Class, Cond, Slot, Step, StoryDef, Test, Trigger, Until, Weather};
 use crate::story::draw::{bar, ink, oval, poly, Tone};
 use crate::story::events::EventKind;
-use crate::story::model::{Accepts, AreaId, Damage, Definition, Material, ObjectDef, ObjectId, RouteId, Snapshot};
+use crate::story::model::{Accepts, AreaId, Damage, Definition, Material, ObjectDef, ObjectId, RouteId};
 use crate::story::physics::{Basin, Segment, Snag, SnowSpot, SurfaceMap};
 
 pub const SHEET: ObjectId = ObjectId(1);
@@ -88,8 +88,6 @@ const AREA_CAP: AreaId = AreaId(1);
 const AREA_TANK: AreaId = AreaId(2);
 const AREA_LINE: AreaId = AreaId(3);
 
-/// Things for stories to say, once.
-pub const STORIES: [&str; 6] = ["washing", "chimney_cap", "tank_leak", "delivery_visit", "neighbours_meet", "roof_rounds"];
 
 pub fn define(b: &RooftopBindings) -> Definition {
     let r = |p: P, w: f32, h: f32| [p.0 - w, p.1 - h, p.0 + w, p.1 + h];
@@ -472,8 +470,11 @@ fn tank_leak(b: &RooftopBindings) -> StoryDef {
         .stage(
             "go_home",
             vec![
+                // the bucket goes back where it lives
+                Step::Carry { who: R0, obj: BUCKET },
                 Step::Move { who: R0, to: RouteId(HATCH_C), run: false },
                 Step::Await { until: Until::Arrived(vec![R0]), timeout: 50.0, on_timeout: None },
+                Step::SetState { obj: BUCKET, change: Change::Restore },
                 Step::Despawn { who: R0 },
                 Step::End,
             ],
@@ -484,6 +485,7 @@ fn tank_leak(b: &RooftopBindings) -> StoryDef {
                 Step::Jet { id: 0, obj: TANK, vel: (0.0, 0.0), rate: 0.0, on: false },
                 Step::SetState { obj: TANK, change: Change::Open(false) },
                 Step::SetState { obj: TANK, change: Change::Restore },
+                Step::SetState { obj: BUCKET, change: Change::Restore },
                 Step::Release { who: R1 },
                 Step::Despawn { who: R1 },
                 Step::Despawn { who: R0 },
@@ -670,11 +672,6 @@ pub fn window_open<S: Surface>(d: &mut Draw<S>, lay: &Layout, rect: [f32; 4], to
     let w = (rect[2] - rect[0]) * 0.22;
     bar(d, lay, [rect[0], rect[1], rect[0] + w, rect[3]], tone.paint([196.0, 90.0, 80.0]), 0.9);
     bar(d, lay, [rect[2] - w, rect[1], rect[2], rect[3]], tone.paint([196.0, 90.0, 80.0]), 0.9);
-}
-
-/// What state does the base show of this object: used by the view to decide what to draw.
-pub fn shows(state: &Snapshot, id: ObjectId) -> bool {
-    state.in_base(id)
 }
 
 #[cfg(test)]

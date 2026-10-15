@@ -50,6 +50,7 @@ pub enum BodyKind {
     Fragment,
     Droplet,
     Flake,
+    #[allow(dead_code)] // the shared kit: no view's definition has called for it yet
     Snowball,
 }
 
@@ -303,6 +304,7 @@ impl Physics {
     }
 
     /// The object being held, if any.
+    #[cfg(test)]
     pub fn held(&self) -> Option<ObjectId> {
         self.grab.map(|g| g.id)
     }
@@ -491,6 +493,7 @@ impl Physics {
         }
     }
 
+    #[cfg(test)]
     pub fn jet_on(&self, slot: usize) -> bool {
         slot < MAX_JETS && self.jets[slot].is_some()
     }
@@ -532,6 +535,7 @@ impl Physics {
     }
 
     /// Sweep snow off whatever is within `radius` of `at`: it falls as loose flakes.
+    #[allow(dead_code)] // the shared kit: no view's definition has called for it yet
     pub fn brush_snow(&mut self, at: P, radius: f32) -> f32 {
         let mut taken = 0.0;
         for p in self.patches.iter_mut().filter(|p| p.kind == PatchKind::Snow && dist2(p.at, at) <= radius * radius) {
@@ -549,6 +553,7 @@ impl Physics {
     }
 
     /// Roll a snowball up from snow near `at`: the ball is a body at rest there.
+    #[allow(dead_code)] // the shared kit: no view's definition has called for it yet
     pub fn roll_snowball(&mut self, at: P, radius: f32) -> bool {
         let Some(p) = self.patches.iter_mut().filter(|p| p.kind == PatchKind::Snow && p.amount >= 0.5 && dist2(p.at, at) <= radius * radius).next() else {
             return false;
@@ -560,6 +565,7 @@ impl Physics {
     }
 
     /// Throw a snowball (or anything small) from `at`.
+    #[allow(dead_code)] // the shared kit: no view's definition has called for it yet
     pub fn throw(&mut self, kind: BodyKind, at: P, vel: P, material: Material, radius: f32) -> bool {
         let speed = (vel.0 * vel.0 + vel.1 * vel.1).sqrt();
         let k = if speed > MAX_THROW { MAX_THROW / speed } else { 1.0 };

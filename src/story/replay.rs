@@ -211,10 +211,6 @@ impl Session {
         Ok(Session { cache, sc, story, shown, anchors, live, sources, depth: None, facts, base_repaints: 0, widest_repaint: 0.0, since_paint: 1.0, now: 0.0 })
     }
 
-    pub fn time(&self) -> f64 {
-        self.now
-    }
-
     /// Hold the wind at this strength (-1.6 to 1.6) whatever the sky says: for a test.
     #[cfg(test)]
     pub fn set_wind(&mut self, wind_x: f32) {
@@ -232,10 +228,6 @@ impl Session {
 
     pub fn sources(&self) -> &Sources {
         &self.sources
-    }
-
-    pub fn anchors(&self) -> &crate::views::Anchors {
-        &self.anchors
     }
 
     pub fn gesture(&mut self, g: Gesture) {
@@ -296,6 +288,7 @@ impl Session {
 
     /// The 20-second refresh: the sky is worked out afresh and the whole base painted again,
     /// from the scene's own state, so nothing that has been broken is mended by it.
+    #[cfg(test)]
     pub fn refresh(&mut self) {
         let (cv, anchors) = paint::render_state(&mut self.sc, &self.cache, &self.story.snapshot());
         self.shown = cv.finish(self.sc.p.grain);

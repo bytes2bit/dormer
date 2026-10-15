@@ -377,6 +377,7 @@ pub fn parcel<S: Surface>(d: &mut Draw<S>, lay: &Layout, at: P, scale: f32, turn
     ink(d, lay, &[corner(0.0, -4.5), corner(0.0, 4.5)], 1.0 * scale, shade(paper, -0.3), alpha);
 }
 
+#[allow(dead_code)] // the shared kit: no view's definition has called for it yet
 pub fn toolbag<S: Surface>(d: &mut Draw<S>, lay: &Layout, at: P, scale: f32, tone: &Tone, alpha: f32) {
     let c = tone.paint([120.0, 84.0, 62.0]);
     poly(d, lay, &[(at.0 - 7.0 * scale, at.1), (at.0 + 7.0 * scale, at.1), (at.0 + 6.0 * scale, at.1 - 7.0 * scale), (at.0 - 6.0 * scale, at.1 - 7.0 * scale)], c, alpha);
@@ -422,6 +423,7 @@ pub fn puddle<S: Surface>(d: &mut Draw<S>, lay: &Layout, p: &Patch, tone: &Tone,
 }
 
 /// A rope, between two points, sagging.
+#[allow(dead_code)] // the shared kit: no view's definition has called for it yet
 pub fn rope<S: Surface>(d: &mut Draw<S>, lay: &Layout, a: P, b: P, slack: f32, scale: f32, tone: &Tone, alpha: f32) {
     let pts: Vec<P> = (0..=10)
         .map(|k| {

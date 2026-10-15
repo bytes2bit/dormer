@@ -12,7 +12,7 @@ use crate::props::Layout;
 use crate::story::actors::{ActorPose, ActorSpec, Kind, Mode, Role, RouteGraph};
 use crate::story::behaviors::{repair, round, visit, Animal, BehaviorSpec, CrewJob, Occupant, Perch, Walker};
 use crate::story::director::{Change, Class, Cond, Slot, Step, StoryDef, Test, Trigger, Until, Weather};
-use crate::story::draw::{bar, ink, oval, poly, Tone};
+use crate::story::draw::{bar, ink, oval, poly};
 use crate::story::events::EventKind;
 use crate::story::model::{Accepts, AreaId, Damage, Definition, Material, ObjectDef, ObjectId, RouteId};
 use crate::story::physics::{Segment, SnowSpot, SurfaceMap};
@@ -29,14 +29,12 @@ pub const PARCEL_2: ObjectId = ObjectId(9);
 pub const PARCEL_3: ObjectId = ObjectId(10);
 pub const WINDOW_A: ObjectId = ObjectId(11);
 pub const WINDOW_B: ObjectId = ObjectId(12);
-pub const SNOWMAN: ObjectId = ObjectId(13);
 
 /// The pavement along the far kerb, the road in front of it, and the diner's roof.
 pub const PAVEMENT: f32 = 866.0;
 pub const FAR_LANE: f32 = 929.0;
 pub const NEAR_LANE: f32 = 958.0;
 pub const HYDRANT_X: f32 = 600.0;
-pub const SIGN_AT: P = (190.0, 630.0);
 pub const ROOF_Y: f32 = 662.0;
 pub const STACK_X: f32 = 506.0;
 pub const WINDOWS: [[f32; 4]; 2] = [[722.0, 592.0, 756.0, 638.0], [784.0, 592.0, 818.0, 638.0]];
@@ -61,16 +59,12 @@ const ROOF_FOOT: u16 = 150;
 const ROOF_TOP: u16 = 151;
 const ROOF_SIGN: u16 = 152;
 const LAMP_A: u16 = 160;
-const LAMP_B: u16 = 161;
 const BIN: u16 = 170;
 const WIN_A: u16 = 171;
 const WIN_B: u16 = 172;
 
 const AREA_ZONE: AreaId = AreaId(1);
-const AREA_ROOF: AreaId = AreaId(2);
-const AREA_SPILL: AreaId = AreaId(3);
 
-pub const STORIES: [&str; 6] = ["hydrant", "diner_sign", "delivery_spill", "customer_visit", "neighbours_stop", "street_round"];
 
 /// Where, along the pavement, the work zone lies while the hydrant is being mended.
 pub const ZONE: (f32, f32) = (470.0, 760.0);
@@ -537,10 +531,6 @@ pub fn sign_tilted<S: Surface>(d: &mut Draw<S>, lay: &Layout, text_bar: [f32; 4]
     let q = |x: f32, y: f32| (cx + (x - cx) * c - (y - cy) * s + pose.dx, cy + (x - cx) * s + (y - cy) * c + pose.dy);
     poly(d, lay, &[q(x0, y0), q(x1, y0), q(x1, y1), q(x0, y1)], col, 1.0);
     ink(d, lay, &[q(x0 + 6.0, (y0 + y1) / 2.0), q(x1 - 6.0, (y0 + y1) / 2.0)], 1.4, shade(col, 0.5), 0.9);
-}
-
-pub fn lamp_dot<S: Surface>(d: &mut Draw<S>, lay: &Layout, at: P, tone: &Tone) {
-    oval(d, lay, at.0, at.1, 2.0, 2.0, tone.paint([250.0, 210.0, 140.0]), 1.0);
 }
 
 #[cfg(test)]

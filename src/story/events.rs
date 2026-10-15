@@ -264,62 +264,6 @@ impl EventBus {
     }
 }
 
-/// Jobs that fall due at a tick, in the order they were scheduled for it.
-pub struct DeadlineQueue<T> {
-    /// kept sorted by (due, order)
-    items: Vec<(u64, u64, T)>,
-    order: u64,
-    capacity: usize,
-}
-
-impl<T> DeadlineQueue<T> {
-    pub fn new(capacity: usize) -> DeadlineQueue<T> {
-        DeadlineQueue { items: Vec::with_capacity(capacity), order: 0, capacity }
-    }
-
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    /// Schedule `job` for tick `due`. Err gives the job back when the queue is full.
-    pub fn schedule(&mut self, due: u64, job: T) -> Result<(), T> {
-        if self.items.len() >= self.capacity {
-            return Err(job);
-        }
-        self.order += 1;
-        let key = (due, self.order);
-        let at = self.items.partition_point(|i| (i.0, i.1) <= key);
-        self.items.insert(at, (due, self.order, job));
-        Ok(())
-    }
-
-    /// The next job that is due at `tick`, if any. Call until it returns None.
-    pub fn pop_due(&mut self, tick: u64) -> Option<T> {
-        if self.items.first().is_some_and(|i| i.0 <= tick) {
-            Some(self.items.remove(0).2)
-        } else {
-            None
-        }
-    }
-
-    /// The tick the next job falls due.
-    pub fn next_due(&self) -> Option<u64> {
-        self.items.first().map(|i| i.0)
-    }
-
-    pub fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
-        self.items.retain(|i| keep(&i.2));
-    }
-
-    pub fn clear(&mut self) {
-        self.items.clear();
-    }
-}
-
 /// Fixed simulation steps from presentation time, with no catching up after a gap.
 #[derive(Clone, Copy, Debug)]
 pub struct SimClock {
@@ -362,11 +306,6 @@ impl SimClock {
     /// Where a tick lies on the simulation's own clock, in seconds.
     pub fn at(tick: u64) -> f64 {
         tick as f64 * STEP
-    }
-
-    /// The tick that is `seconds` of simulation time from now (rounded up, at least one).
-    pub fn after(&self, seconds: f64) -> u64 {
-        self.tick + ((seconds / STEP).ceil().max(1.0) as u64)
     }
 }
 
@@ -452,28 +391,9 @@ mod tests {
     }
 
     #[test]
-    fn deadlines_preserve_order_and_pause() {
-        let mut q: DeadlineQueue<&str> = DeadlineQueue::new(8);
-        q.schedule(30, "c").unwrap();
-        q.schedule(10, "a").unwrap();
-        q.schedule(10, "b").unwrap(); // later in order, same tick
-        q.schedule(20, "mid").unwrap();
-        assert_eq!(q.next_due(), Some(10));
-        assert_eq!(q.pop_due(9), None, "nothing is due early");
-        assert_eq!(q.pop_due(10), Some("a"));
-        assert_eq!(q.pop_due(10), Some("b"));
-        assert_eq!(q.pop_due(10), None);
-        assert_eq!(q.pop_due(100), Some("mid"));
-        assert_eq!(q.pop_due(100), Some("c"));
-        // full: the job comes back
-        for n in 0..8 {
-            q.schedule(n, "x").unwrap();
-        }
-        assert_eq!(q.schedule(1, "late"), Err("late"));
-
+    fn a_pause_takes_no_ticks_and_resuming_is_one_frame() {
         // time: a pause (hidden, held) takes no ticks however long it lasts
         let mut clock = SimClock::new();
-        let due = clock.after(1.0);
         clock.paused = true;
         for _ in 0..1000 {
             assert_eq!(clock.advance(0.1), 0);
@@ -482,7 +402,7 @@ mod tests {
         clock.paused = false;
         // resuming after a long sleep is one frame's worth, not a catch-up of everything missed
         assert!(clock.advance(3600.0) <= 3);
-        assert!(clock.tick < due);
+        assert!(clock.tick <= 3);
         // while ordinary frames add up to the right amount
         let mut c = SimClock::new();
         for _ in 0..300 {
