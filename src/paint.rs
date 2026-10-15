@@ -51,7 +51,7 @@ pub fn render_state(sc: &mut Scene, cache: &Cache, state: &crate::story::Snapsho
     let mut out = Anchors::default();
 
     // Which windows are lit is needed twice: for the glow the place throws at the sky, and to draw them.
-    let lights = cache.stage.lights(sc);
+    let lights = cache.stage.lights_state(sc, state);
     sc.lit_share = lights.share;
     let sc = &*sc;
     let cx = Ctx { sc, cache, lay };

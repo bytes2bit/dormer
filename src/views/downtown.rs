@@ -20,7 +20,11 @@ use crate::props::{self, Layout, DW};
 use crate::rng::hash2;
 use crate::scene::Scene;
 use crate::views::kit::{self, Block, Cap, Paint, Row, Skin, Use};
+use crate::story::draw::Tone;
+use crate::story::{Damage, Snapshot};
+use crate::views::episodes::city::{self as episode, CityBindings};
 use crate::views::{lamp_colours, yours, Anchors, Blink, Breath, Lights, Smoke, Stage, View, Yours};
+use std::cell::Cell;
 
 pub struct Downtown;
 
@@ -274,6 +278,14 @@ struct City {
     lantern: [f32; 4],
     /// the tier under it, where the container floors show
     floors: [f32; 4],
+    /// what the living scene works with, in design units
+    bind: CityBindings,
+    /// the instant the crane stopped, while its load is caught
+    held: Cell<Option<f64>>,
+    /// the load is caught, as of the last frame
+    caught: Cell<bool>,
+    /// the signal has failed: no passing train goes through the one that is stopped
+    signal_down: Cell<bool>,
 }
 
 impl City {
@@ -319,7 +331,43 @@ impl City {
         let rows = vec![far, towers, mid, rail, near];
         let masks: Vec<(usize, Vec<u8>)> = rows.iter().map(|r| (r.mask.0, r.mask.1.clone())).collect();
         let depth = Depth::stack(&masks, w, h);
-        City { lay, rows, depth, lantern, floors }
+        let bind = City::bindings(&lay, &rows, w);
+        City { lay, rows, depth, lantern, floors, bind, held: Cell::new(None), caught: Cell::new(false), signal_down: Cell::new(false) }
+    }
+
+    /// Where the living scene's objects are in this city, in design units.
+    fn bindings(lay: &Layout, rows: &[Row], w: usize) -> CityBindings {
+        let works = &rows[1].shapes[WORKS];
+        let back = |x: f32, y: f32| lay.back(x, y);
+        let (wx0, wy) = back(works.roof[0], works.roof[2]);
+        let (wx1, _) = back(works.roof[1], works.roof[2]);
+        // the first window of the streets row nearest to a place, as a design rectangle
+        let window_near = |x: f32, y: f32| -> [f32; 4] {
+            let (px, py) = (lay.dx(x), lay.dy(y));
+            let best = rows[2].wins.iter().filter(|v| !v.strip).min_by(|a, b| {
+                let d = |v: &kit::Win| (v.x + v.w / 2.0 - px).powi(2) + (v.y + v.h / 2.0 - py).powi(2);
+                d(a).partial_cmp(&d(b)).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            match best {
+                Some(v) => {
+                    let (x0, y0) = back(v.x, v.y);
+                    let (x1, y1) = back(v.x + v.w, v.y + v.h);
+                    [x0, y0, x1, y1]
+                }
+                None => [x - 4.0, y - 5.0, x + 4.0, y + 5.0],
+            }
+        };
+        let _ = w;
+        CityBindings {
+            signal_x: 620.0,
+            works: (wx0, wx1, wy),
+            pallet: (wx0 + 20.0, wy - 22.0),
+            box_at: (538.0, 956.0),
+            cat: (CAT_SPOTS[0].0, CAT_SPOTS[0].1),
+            perch: (CLOCK_X, CLOCK_TOP - 74.0),
+            group: [560.0, 740.0, 700.0, 890.0],
+            windows: [window_near(500.0, 800.0), window_near(800.0, 820.0)],
+        }
     }
 
     /// The top of the crane's mast, in pixels.
@@ -377,7 +425,91 @@ impl Stage for City {
         out
     }
 
+    fn lights_state(&self, sc: &Scene, state: &Snapshot) -> Lights {
+        let mut out = self.lights(sc);
+        if state.damage(episode::BLOCK) != Damage::Intact {
+            // a block on one supply goes dark together
+            let [g0, g1, g2, g3] = self.bind.group;
+            let (x0, y0, x1, y1) = (self.lay.dx(g0), self.lay.dy(g1), self.lay.dx(g2), self.lay.dy(g3));
+            let at: usize = self.rows[..2].iter().map(|r| r.wins.len()).sum();
+            for (k, v) in self.rows[2].wins.iter().enumerate() {
+                let (cx, cy) = (v.x + v.w / 2.0, v.y + v.h / 2.0);
+                if cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1 {
+                    out.on[at + k] = None;
+                }
+            }
+            out.share = out.on.iter().filter(|w| w.is_some()).count() as f32 / out.on.len().max(1) as f32;
+        }
+        out
+    }
+
     fn ground(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors) {
+        self.ground_state(d, sc, lights, bloom, out, &Snapshot::intact())
+    }
+
+    fn story(&self) -> Option<crate::story::Definition> {
+        Some(episode::define(&self.bind))
+    }
+
+    fn story_tone(&self, sc: &Scene, layer: Option<u8>) -> Tone {
+        let row = match layer {
+            Some(l) if l <= 1 => 1,
+            Some(2) => 2,
+            Some(3) => 3,
+            _ => 4,
+        };
+        Tone::new(if row == 1 { tower_col(sc) } else { sc.layers[row] }, 0.22 + 0.64 * sc.day, sc.sky[5])
+    }
+
+    fn story_actor(&self, d: &mut Draw<Frame>, sc: &Scene, a: &crate::story::actors::Actor, _t: f32) -> bool {
+        if a.kind != crate::story::actors::Kind::Train {
+            return false;
+        }
+        train(d, sc, &self.lay, a.pos.0, 1.0);
+        true
+    }
+
+    fn story_alive(&self, d: &mut Draw<Frame>, sc: &Scene, state: &Snapshot, t: f32, indoors: bool) {
+        if indoors {
+            return;
+        }
+        let lay = &self.lay;
+        let b = &self.bind;
+        self.signal_down.set(state.damage(episode::SIGNAL) != Damage::Intact);
+        let caught = state.damage(episode::LOAD) != Damage::Intact;
+        self.caught.set(caught);
+        if !caught {
+            self.held.set(None);
+        }
+        let tone = |l: u8| self.story_tone(sc, Some(l));
+        d.s.behind = Some(3);
+        if state.damage(episode::SIGNAL) != Damage::Intact {
+            episode::signal_blink(d, lay, b.signal_x, t);
+        }
+        let s = state.get(episode::SIGNAL);
+        if s.visible && !state.in_base(episode::SIGNAL) && s.damage != Damage::Missing {
+            episode::signal_mast(d, lay, b.signal_x + s.pose.dx, s.damage, &tone(3));
+        }
+        for (id, at, kind) in [(episode::CONE, (b.signal_x - 20.0, episode::DECK_Y), 0), (episode::BARRIER, (b.signal_x - 70.0, episode::DECK_Y), 1), (episode::PART, (b.pallet.0 + 6.0, b.pallet.1 + 4.0), 2)] {
+            let s = state.get(id);
+            if !s.visible || state.in_base(id) || s.damage == Damage::Missing {
+                continue;
+            }
+            self.paint_thing(d, sc, kind, (at.0 + s.pose.dx, at.1 + s.pose.dy), s.pose.turn);
+        }
+        d.s.behind = Some(1);
+        let s = state.get(episode::LOAD);
+        if s.visible && !state.in_base(episode::LOAD) {
+            episode::hoist(d, lay, b.works, b.pallet, s.damage, &tone(1), s.pose);
+        }
+        d.s.behind = None;
+        let s = state.get(episode::BOX);
+        if s.visible && !state.in_base(episode::BOX) && s.damage != Damage::Missing {
+            episode::junction_box(d, lay, (b.box_at.0 + s.pose.dx, b.box_at.1 + s.pose.dy), s.damage, &tone(4));
+        }
+    }
+
+    fn ground_state(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors, state: &Snapshot) {
         let lay = &self.lay;
         let u = lay.u;
         let cols = sc.layers;
@@ -432,7 +564,7 @@ impl Stage for City {
         }
         let towers = &self.rows[1];
         kit::paint(d, sc, lay, towers, on(towers), bloom, &Paint { col: tower_col(sc), glass: 0.55, bloom: 0.8, rim: 0.85, tone: 0.045, hue: 0.035 });
-        self.landmarks(d, sc, &light, bloom, out, night);
+        self.landmarks(d, sc, &light, bloom, out, night, state);
 
         // ── the streets in front of them ──
         band(d.s, lay.dy(MID.0 - 120.0), lay.dy(MID.0 + 90.0), 52.0 * u, sc.haze, hz(sc.haze_alpha[2]));
@@ -458,7 +590,7 @@ impl Stage for City {
         if sc.mist > 0.02 {
             band(d.s, lay.dy(DECK - 30.0), lay.h * 1.3, 26.0 * u, mix(sc.sky[5], sc.haze, 0.4), 0.24 * sc.mist);
         }
-        if !sc.live {
+        if !sc.live && state.damage(episode::SIGNAL) == Damage::Intact {
             if let Some((nose, way)) = train_at(sc, sc.ts) {
                 train(d, sc, lay, nose, way);
             }
@@ -466,12 +598,12 @@ impl Stage for City {
         let rail = &self.rows[3];
         let stone = mix(cols[3], cols[2], 0.28);
         kit::paint(d, sc, lay, rail, on(rail), bloom, &Paint { col: stone, glass: 0.0, bloom: 0.0, rim: 0.0, tone: 0.0, hue: 0.0 });
-        self.station(d, sc, stone, &light, bloom, out);
+        self.station(d, sc, stone, &light, bloom, out, state);
 
         // ── the roofs under the window ──
         let near = &self.rows[4];
         kit::paint(d, sc, lay, near, on(near), bloom, &Paint { col: cols[4], glass: 0.0, bloom: 0.0, rim: 0.0, tone: 0.0, hue: 0.0 });
-        self.roofs(d, sc, &light, bloom, out);
+        self.roofs(d, sc, &light, bloom, out, state);
     }
 
     fn alive(&self, d: &mut Draw<Frame>, sc: &Scene, _a: &Anchors, t: f32, now: f64) {
@@ -480,8 +612,10 @@ impl Stage for City {
         let (cx, foot, top) = self.crane();
         let _ = foot;
         d.s.behind = Some(2);
-        props::crane_jib(d, cx, top, u, tower_col(sc), props::crane_pose(sc, now));
-        if let Some((nose, way)) = train_at(sc, now) {
+        // while its load is caught the crane stands where it stopped
+        let at = if self.held.get().is_none() && self.hold_wanted() { self.held.set(Some(now)); now } else { self.held.get().unwrap_or(now) };
+        props::crane_jib(d, cx, top, u, tower_col(sc), props::crane_pose(sc, at));
+        if let Some((nose, way)) = train_at(sc, now).filter(|_| !self.signal_down.get()) {
             d.s.behind = Some(3);
             train(d, sc, lay, nose, way);
         }
@@ -497,13 +631,13 @@ impl Stage for City {
     }
 
     fn lively(&self, sc: &Scene, now: f64) -> bool {
-        train_at(sc, now).is_some()
+        train_at(sc, now).is_some() && !self.signal_down.get()
     }
 }
 
 impl City {
     /// What marks out particular towers: your lantern, the beacon, the sign, the crane.
-    fn landmarks(&self, d: &mut Draw<Canvas>, sc: &Scene, light: &Light, bloom: &mut Bloom, out: &mut Anchors, night: f32) {
+    fn landmarks(&self, d: &mut Draw<Canvas>, sc: &Scene, light: &Light, bloom: &mut Bloom, out: &mut Anchors, night: f32, state: &Snapshot) {
         let lay = &self.lay;
         let u = lay.u;
         let col = tower_col(sc);
@@ -625,6 +759,11 @@ impl City {
         if !sc.live {
             props::crane_jib(d, cx, top, u, col, props::crane_pose(sc, sc.ts));
         }
+        // the hoist on the open floors, and its load
+        let s = state.get(episode::LOAD);
+        if s.visible && state.in_base(episode::LOAD) {
+            episode::hoist(d, lay, self.bind.works, self.bind.pallet, s.damage, &self.story_tone(sc, Some(1)), s.pose);
+        }
         if sc.dark > 0.3 {
             let apex = (cx, top - 30.0 * u);
             d.glow(apex.0, apex.1, 9.0 * u, 9.0 * u, BEACON, 0.6 * sc.dark, 2, Blend::Screen);
@@ -642,7 +781,7 @@ impl City {
     }
 
     /// The station: the lines of its glass roof, and the clock.
-    fn station(&self, d: &mut Draw<Canvas>, sc: &Scene, col: Rgb, light: &Light, bloom: &mut Bloom, out: &mut Anchors) {
+    fn station(&self, d: &mut Draw<Canvas>, sc: &Scene, col: Rgb, light: &Light, bloom: &mut Bloom, out: &mut Anchors, state: &Snapshot) {
         let lay = &self.lay;
         let u = lay.u;
         let slate = shade(col, -0.10);
@@ -681,6 +820,17 @@ impl City {
         }
         props::clock_face(d, sc, x, top - lay.d(17.0), lay.d(13.4), u, col, bloom);
         out.perch = Some((x, tip));
+        // the signal beyond the platform
+        let s = state.get(episode::SIGNAL);
+        if s.visible && state.in_base(episode::SIGNAL) {
+            episode::signal_mast(d, lay, self.bind.signal_x + s.pose.dx, s.damage, &self.story_tone(sc, Some(3)));
+        }
+        for (id, at, kind) in [(episode::CONE, (self.bind.signal_x - 20.0, episode::DECK_Y), 0), (episode::BARRIER, (self.bind.signal_x - 70.0, episode::DECK_Y), 1), (episode::PART, (self.bind.pallet.0 + 6.0, self.bind.pallet.1 + 4.0), 2)] {
+            let s = state.get(id);
+            if s.visible && state.in_base(id) && s.damage != Damage::Missing {
+                self.paint_thing(d, sc, kind, (at.0 + s.pose.dx, at.1 + s.pose.dy), s.pose.turn);
+            }
+        }
         // lamps along the parapet of the viaduct
         if dusk > 0.05 {
             let mut lx = 18.0;
@@ -696,7 +846,7 @@ impl City {
     }
 
     /// What is on the roofs nearest the window.
-    fn roofs(&self, d: &mut Draw<Canvas>, sc: &Scene, light: &Light, bloom: &mut Bloom, out: &mut Anchors) {
+    fn roofs(&self, d: &mut Draw<Canvas>, sc: &Scene, light: &Light, bloom: &mut Bloom, out: &mut Anchors, state: &Snapshot) {
         let lay = &self.lay;
         let u = lay.u;
         let col = sc.layers[4];
@@ -793,8 +943,36 @@ impl City {
         if sc.cat_out && sc.cat_asleep {
             props::cat(d, dx(1086.0), dy(958.0), u * 1.25, col, true, 1.0, 0.0);
         }
+        // the junction box on the long low roof
+        let s = state.get(episode::BOX);
+        if s.visible && state.in_base(episode::BOX) {
+            episode::junction_box(d, lay, (self.bind.box_at.0 + s.pose.dx, self.bind.box_at.1 + s.pose.dy), s.damage, &self.story_tone(sc, None));
+        }
+        // a window someone has opened
+        for (id, r) in [(episode::WINDOW_A, self.bind.windows[0]), (episode::WINDOW_B, self.bind.windows[1])] {
+            if state.get(id).open {
+                let lit = mix(WARM[0], WHITE, 0.2);
+                d.rect(dx(r[0]) - 0.6 * u, dy(r[1]) - 0.6 * u, dx(r[2]) + 0.6 * u, dy(r[3]) + 0.6 * u, lit, 0.9);
+                bloom.light(dx(r[0]), dy(r[1]), dx(r[2]), dy(r[3]), WARM[1], 0.6 * (0.3 + 0.7 * sc.dark));
+            }
+        }
         out.leaves = true;
         out.glades.push([dx(570.0), dy(930.0), dx(900.0), dy(966.0)]);
+    }
+
+    /// A cone, a barrier or a steel plate, in the light of the deck.
+    fn paint_thing<S: crate::gfx::Surface>(&self, d: &mut Draw<S>, sc: &Scene, kind: u8, at: (f32, f32), turn: f32) {
+        let tone = self.story_tone(sc, Some(3));
+        match kind {
+            0 => crate::story::draw::cone(d, &self.lay, at, 0.55, &tone, 1.0),
+            1 => crate::story::draw::barrier(d, &self.lay, at, 28.0, 0.55, &tone, 1.0),
+            _ => crate::story::draw::crate_box(d, &self.lay, at, 0.35, turn, &tone, 1.0),
+        }
+    }
+
+    /// Does the living scene want the crane held, as far as the last frame told?
+    fn hold_wanted(&self) -> bool {
+        self.caught.get()
     }
 }
 

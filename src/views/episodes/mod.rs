@@ -6,5 +6,6 @@
 //! crews) live in `story/`, so none of this is simulation code: it says where
 //! things are and what happens when they are disturbed.
 
+pub mod city;
 pub mod rooftops;
 pub mod street;

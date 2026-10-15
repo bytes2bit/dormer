@@ -143,6 +143,12 @@ pub trait Stage {
 
     fn lights(&self, sc: &Scene) -> Lights;
 
+    /// Which windows are lit, once the living scene has put some of them out (a fault, a
+    /// shutter). Views with nothing of the kind need not say.
+    fn lights_state(&self, sc: &Scene, _state: &crate::story::Snapshot) -> Lights {
+        self.lights(sc)
+    }
+
     /// What this view lets a living scene change: its objects, routes and stories. None where
     /// nothing in the view is interactive.
     fn story(&self) -> Option<crate::story::Definition> {
