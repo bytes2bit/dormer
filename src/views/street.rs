@@ -1372,24 +1372,6 @@ impl Stage for Walkups {
         d.s.behind = None;
     }
 
-    fn targets(&self, sc: &Scene, a: &Anchors) -> Vec<crate::interaction::Target> {
-        use crate::interaction::{common_targets, Action, Target};
-        let mut out = common_targets(sc, &self.lay, a);
-        if wet(sc) > 0.2 {
-            out.push(Target::new(100, [0.0, KERB + 4.0, DW, SILL - 15.0], (850.0, 920.0), Action::Ripple, mix(sc.sky[5], WARM[1], 0.45), Some(OURS)));
-        }
-        out.push(Target::near(101, MUG, 27.0, Action::Light, mix(CREAM, AMBER, 0.3), None));
-        out.push(Target::near(102, (80.0, 910.0), 34.0, Action::Light, SAGE, None));
-        if let Puss::Sill { asleep } = puss(sc, sc.ts) {
-            let dusk = smooth(2.0, -4.0, sc.el_eff);
-            let fur = mix(mix(sc.layers[4], [96.0, 90.0, 92.0], 0.45 + 0.2 * sc.day), AMBER, 0.20 * dusk);
-            let unit = 2.5 / 1.2;
-            let head = (SILL_CAT - if asleep { 10.0 } else { 2.0 } * unit, SILL + 0.5 - if asleep { 7.0 } else { 20.5 } * unit);
-            out.push(Target::near(103, head, 38.0, Action::Cat, fur, None));
-        }
-        out
-    }
-
     fn lively(&self, sc: &Scene, now: f64) -> bool {
         !traffic(sc, now).is_empty() || matches!(puss(sc, now), Puss::Walking(..))
     }

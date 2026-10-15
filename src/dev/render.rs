@@ -126,8 +126,7 @@ fn draw_row(s: &mut Screen, model: &Model, row: &Row, list: CellRect) {
                 s.put(b.x + knob as u16, b.y, "●", if held { ACCENT } else { BOLD });
             }
         }
-        Shape::Toggle => {}
-        Shape::Choice => {}
+        Shape::Toggle | Shape::Choice | Shape::Button => {}
     }
 
     // the value, or the text being typed
@@ -136,6 +135,7 @@ fn draw_row(s: &mut Screen, model: &Model, row: &Row, list: CellRect) {
     } else {
         let text = match row.shape {
             Shape::Toggle => format!("[{}] {}", if value > 0.5 { "x" } else { " " }, model.show(field)),
+            Shape::Button => format!("[ {} ]", model.show(field)),
             Shape::Choice => format!("‹ {} ›", model.show(field)),
             Shape::Slider => {
                 let full = model.show(field);

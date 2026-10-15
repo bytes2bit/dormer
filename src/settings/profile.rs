@@ -9,7 +9,7 @@ impl RuntimeSettings {
     /// Put the saved profile on top of the real inputs in `moment`: fixed sources replace what
     /// was read, `Auto` leaves the real reading alone. Dev-panel drafts and command-line
     /// arguments are laid over this afterwards.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn apply(&self, moment: &mut Moment) -> Result<(), SettingsError> {
         self.apply_except(moment, &[])
     }

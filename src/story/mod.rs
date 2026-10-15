@@ -20,6 +20,7 @@ pub mod draw;
 pub mod events;
 pub mod model;
 pub mod physics;
+pub mod replay;
 
 pub use actors::{ActorCommand, ActorSpec, ActorSystem};
 pub use director::{Facts, TriggerResult};
@@ -173,6 +174,12 @@ impl StoryWorld {
         &self.objects
     }
 
+    /// For tests that set a scene up by hand.
+    #[cfg(test)]
+    pub fn objects_mut(&mut self) -> &mut ObjectStore {
+        &mut self.objects
+    }
+
     /// Simulation time, in seconds.
     pub fn time(&self) -> f64 {
         self.clock.seconds()
@@ -259,6 +266,19 @@ impl StoryWorld {
     /// The same with the sky and the hour read from the scene.
     pub fn step(&mut self, dt: f64, scene: &crate::scene::Scene) -> u32 {
         self.step_facts(dt, &facts_of(scene))
+    }
+
+    /// Bring the world up to date after `dt` seconds of wall time. A long gap on a visible
+    /// output (a wait for the next job) runs in chunks; at most two minutes of it, so no gap
+    /// ever becomes an unbounded catch-up. Hidden or held outputs do not call this at all.
+    pub fn advance(&mut self, dt: f64, scene: &crate::scene::Scene) {
+        let facts = facts_of(scene);
+        let mut left = if dt.is_finite() { dt.clamp(0.0, 120.0) } else { 0.0 };
+        while left > 1e-9 {
+            let chunk = left.min(events::MAX_FRAME);
+            self.step_facts(chunk, &facts);
+            left -= chunk;
+        }
     }
 
     pub fn set_paused(&mut self, paused: bool) {

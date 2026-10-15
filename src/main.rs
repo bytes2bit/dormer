@@ -66,6 +66,8 @@ More:
     dormer hold on|off          freeze or release the living wallpaper (for a lock screen)
     dormer install --no-live    still frames only         dormer uninstall
     dormer dev --here           run the panel in this terminal
+    dormer scenes list          what can happen in each view (--view NAME for one)
+    dormer replay FILE --out D  play timed gestures and triggers from a file; write frames and a trace
 ";
 
 pub struct Args {
@@ -270,6 +272,39 @@ pub fn real_moment(mode: Option<&str>, overrides: bool) -> Moment {
     let mut m = raw_moment(mode);
     settle(&mut m, overrides);
     m
+}
+
+/// The scene a replay or a recorded frame plays in: the same every time. A named evening, clear
+/// weather and a quiet machine unless it says otherwise, with whatever the saved settings fix laid
+/// on top; nothing is read from the real sky or this machine.
+pub fn replay_moment(view: &'static dyn View, at: Option<&str>, weather: Option<&str>, mode: Option<&str>, settings: &settings::RuntimeSettings) -> Result<Moment, String> {
+    let cfg = config();
+    let place = match (cfg.latitude, cfg.longitude) {
+        (Some(lat), Some(lon)) => Place { lat, lon, name: cfg.place_name.clone() },
+        _ => Place { lat: 35.7758, lon: -5.7909, name: "Tangier".into() },
+    };
+    let mut wx = sky::from_wmo(0);
+    wx.known = true;
+    if let Some(kind) = weather {
+        wx = preset(kind, &wx).ok_or(format!("weather is one of: {}", PRESETS.map(|p| p.0).join(" ")))?;
+    }
+    let when = at.unwrap_or("2026-10-13 21:00");
+    let ts = tm::parse(when).ok_or(format!("cannot read the time '{}'", when))?;
+    let mode = match mode {
+        Some(m) if m == "dark" || m == "light" => m.to_string(),
+        Some(m) => return Err(format!("mode is dark or light, not '{}'", m)),
+        None => "dark".to_string(),
+    };
+    let mut m = Moment { ts, wx, place, machine: Machine::default(), mode, rates: Rates::default(), bent: true, view, knobs: Vec::new() };
+    settings.apply_except(&mut m, &[]).map_err(|e| e.to_string())?;
+    // the command line's own time and weather are laid over the saved ones
+    if let Some(when) = at {
+        m.ts = tm::parse(when).ok_or(format!("cannot read the time '{}'", when))?;
+    }
+    if let Some(kind) = weather {
+        m.wx = preset(kind, &m.wx).ok_or(format!("weather is one of: {}", PRESETS.map(|p| p.0).join(" ")))?;
+    }
+    Ok(m)
 }
 
 fn moment(args: &Args) -> Result<Moment, String> {
@@ -579,6 +614,50 @@ fn cmd_tour(args: &Args) -> Result<i32, String> {
     }
     let forced = Args { flags: HashMap::from([("force".to_string(), "1".to_string())]), pos: Vec::new() };
     cmd_draw(&forced)
+}
+
+/// What can happen in each view: its objects and its stories.
+fn cmd_scenes(args: &Args) -> Result<i32, String> {
+    match args.pos.first().map(|s| s.as_str()) {
+        None | Some("list") => {}
+        Some(other) => return Err(format!("usage: dormer scenes list [--view NAME] (not '{}')", other)),
+    }
+    let chosen: Vec<&'static dyn View> = match args.get("view") {
+        Some(id) => vec![views::find(id).ok_or_else(|| format!("--view: {}", views::refusal(id)))?],
+        None => views::ALL.to_vec(),
+    };
+    for v in chosen {
+        let Some(def) = v.stage(config().seed, 640, 400).story() else {
+            println!("{:<9} nothing happens here beyond the weather and the day", v.id());
+            continue;
+        };
+        println!("{:<9} {} objects, {} places to go, {} stories", v.id(), def.objects.len(), def.routes.nodes.len(), def.stories.len());
+        for s in &def.stories {
+            let trigger = match &s.trigger {
+                story::director::Trigger::Named => "when asked".to_string(),
+                story::director::Trigger::Damage(o, _) => format!("when {} is damaged", def.object(*o).map_or("?", |d| d.name)),
+                story::director::Trigger::Event(k, o) => format!("on {:?} to {}", k, def.object(*o).map_or("?", |d| d.name)),
+                story::director::Trigger::Ambient { every, .. } => format!("on its own, every {:.0}-{:.0} s", every.0, every.1),
+            };
+            let class = if s.class == story::director::Class::Incident { "incident" } else { "daily" };
+            println!("    {:<22} {:<9} {}; {} stages, up to {} escalations", s.name, class, trigger, s.stages.len(), s.escalations.len());
+        }
+    }
+    Ok(0)
+}
+
+/// Play a replay file and write its frames and a trace of what happened.
+fn cmd_replay(args: &Args) -> Result<i32, String> {
+    let Some(file) = args.pos.first() else { return Err("usage: dormer replay FILE --out DIRECTORY".into()) };
+    let out = args.get("out").ok_or("dormer replay needs --out DIRECTORY")?;
+    let replay = story::replay::Replay::read(std::path::Path::new(file)).map_err(|e| e.to_string())?;
+    let report = story::replay::run(&replay, std::path::Path::new(out), &settings::runtime()).map_err(|e| e.to_string())?;
+    for f in &report.frames {
+        println!("{}", f);
+    }
+    println!("{}", report.trace);
+    println!("{} ticks, {} base repaints, the widest {:.1}% of the screen", report.ticks, report.base_repaints, report.widest_repaint * 100.0);
+    Ok(0)
 }
 
 fn cmd_hold(args: &Args) -> Result<i32, String> {
@@ -894,6 +973,8 @@ fn main() {
         "tour" => cmd_tour(&args),
         "pretend" => cmd_pretend(&args),
         "hold" => cmd_hold(&args),
+        "scenes" => cmd_scenes(&args),
+        "replay" => cmd_replay(&args),
         "install" => cmd_install(&args),
         "uninstall" => cmd_uninstall(),
         "doctor" => cmd_doctor(),

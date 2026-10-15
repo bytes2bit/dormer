@@ -537,15 +537,34 @@ pub fn live_pid() -> i64 {
 /// What the dev panel (or the tour) is holding the scene to, while it is running: the values
 /// it sets, and the keys it gives back to reality although the saved profile fixes them.
 pub fn dev_state() -> (serde_json::Map<String, Value>, Vec<String>) {
-    let path = cache_file("dev.json");
-    let Some(data) = read_json(&path) else { return Default::default() };
-    if !alive(data.get("pid").and_then(|p| p.as_i64()).unwrap_or(0), &["dormer"]) {
-        let _ = fs::remove_file(&path); // it died without tidying up
-        return Default::default();
-    }
+    let Some(data) = dev_json() else { return Default::default() };
     let set = data.get("set").and_then(|s| s.as_object()).cloned().unwrap_or_default();
     let auto = data.get("auto").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|k| k.as_str().map(str::to_string)).collect()).unwrap_or_default();
     (set, auto)
+}
+
+/// The dev panel's (or tour's) file, while its producer is alive.
+fn dev_json() -> Option<Value> {
+    let path = cache_file("dev.json");
+    let data = read_json(&path)?;
+    if !alive(data.get("pid").and_then(|p| p.as_i64()).unwrap_or(0), &["dormer"]) {
+        let _ = fs::remove_file(&path); // it died without tidying up
+        return None;
+    }
+    Some(data)
+}
+
+/// What the panel has asked of the running scenes (trigger, pause, step, reset), if it is open.
+pub fn dev_scene() -> Option<Value> {
+    dev_json()?.get("scene").cloned()
+}
+
+/// A comparable summary of what the panel is holding the sky to (not its scene commands).
+pub fn dev_signature() -> String {
+    match dev_json() {
+        Some(d) => format!("{}|{}", d.get("set").map_or(String::new(), |v| v.to_string()), d.get("auto").map_or(String::new(), |v| v.to_string())),
+        None => String::new(),
+    }
 }
 
 /// What the dev panel (or the tour) is setting, while it is running.

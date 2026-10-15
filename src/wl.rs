@@ -34,7 +34,10 @@ use crate::paint::{self, Cache};
 use crate::scene::Scene;
 use crate::sources::{self, cache_file, config};
 use crate::views::{Anchors, View};
-use crate::interaction::{Interaction, Target, pointer_position};
+use crate::gfx::Depth;
+use crate::interaction::{pointer_position, Track};
+use crate::story::physics::MAX_THROW;
+use crate::story::{Gesture, StoryWorld};
 use crate::pointer::{Cursor, Seat};
 use crate::{build, raw_moment, settle, tm, Moment, State};
 
@@ -135,9 +138,105 @@ struct Screen {
     sent: f64,
     /// the compositor has not shown that frame for a while: the screen is off or asleep
     dark: bool,
-    interaction: Interaction,
-    targets: Vec<Target>,
     base_stale: bool,
+    /// the living scene of what this output shows
+    story: Option<StoryWorld>,
+    /// the scenes of views looked out on before, kept for coming back to
+    parked: Vec<(&'static str, StoryWorld)>,
+    /// what hides what once the scene has changed things; None: as the view laid it out
+    depth: Option<Depth>,
+    /// what the pointer has done since the last step: bounded, with movement folded together
+    pending: Vec<Gesture>,
+    track: Track,
+    pressed: bool,
+    /// the monotonic time the scene was last brought up to date to
+    story_at: f64,
+    /// when the base picture was last repainted for the scene
+    base_at: f64,
+}
+
+/// Gestures kept between steps.
+const PENDING: usize = 16;
+
+impl Screen {
+    /// Queue one pointer gesture. Movement over movement replaces it: only where it got to matters.
+    fn queue(&mut self, g: Gesture) {
+        let folds = matches!(g, Gesture::Hover(_) | Gesture::Drag(_));
+        if let Some(last) = self.pending.last_mut() {
+            if folds && matches!((&*last, &g), (Gesture::Hover(_), Gesture::Hover(_)) | (Gesture::Drag(_), Gesture::Drag(_))) {
+                *last = g;
+                return;
+            }
+        }
+        if self.pending.len() >= PENDING {
+            // full of presses and releases: the oldest hover or drag goes, or the newest is dropped
+            match self.pending.iter().position(|p| matches!(p, Gesture::Hover(_) | Gesture::Drag(_))) {
+                Some(k) => {
+                    self.pending.remove(k);
+                }
+                None => return,
+            }
+        }
+        self.pending.push(g);
+    }
+
+    /// The pointer is gone (left, the seat vanished, the output went quiet): let go of anything held.
+    fn cancel_input(&mut self) {
+        self.pending.clear();
+        self.track.reset();
+        if std::mem::take(&mut self.pressed) {
+            if let Some(w) = self.story.as_mut() {
+                w.gesture(Gesture::Cancel);
+            }
+        }
+    }
+
+    fn park(&mut self, w: StoryWorld) {
+        let id = w.definition().view;
+        self.parked.retain(|p| p.0 != id);
+        if self.parked.len() < 8 {
+            self.parked.push((id, w));
+        }
+    }
+
+    /// Lay the scene out for the view and size this output now has: a world for the view that
+    /// is on it, the same one rebound if it is already there, or one parked from earlier.
+    fn attach_story(&mut self, seed: u64) {
+        let Some(cache) = &self.cache else { return };
+        let Some(def) = cache.stage.story() else {
+            if let Some(w) = self.story.take() {
+                self.park(w);
+            }
+            return;
+        };
+        let view = def.view;
+        self.depth = None;
+        if let Some(w) = self.story.as_mut() {
+            if w.definition().view == view {
+                if let Err(e) = w.rebind(def) {
+                    eprintln!("dormer: {}", e);
+                }
+                return;
+            }
+        }
+        if let Some(old) = self.story.take() {
+            self.park(old);
+        }
+        let parked = self.parked.iter().position(|p| p.0 == view).map(|k| self.parked.remove(k).1);
+        self.story = match parked {
+            Some(mut w) => match w.rebind(def.clone()) {
+                Ok(()) => Some(w),
+                Err(_) => StoryWorld::new(def, seed).ok(),
+            },
+            None => match StoryWorld::new(def, seed) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    eprintln!("dormer: {}", e);
+                    None
+                }
+            },
+        };
+    }
 }
 
 impl Screen {
@@ -187,6 +286,9 @@ pub(crate) struct App {
     probe: bool,
     spent: [f64; 4],
     frames: u32,
+    /// the last scene command from the panel that was carried out, and what the panel holds the sky to
+    scene_serial: u64,
+    dev_seen: String,
 }
 
 impl App {
@@ -215,9 +317,15 @@ impl App {
             open: true,
             sent: 0.0,
             dark: false,
-            interaction: Interaction::new(),
-            targets: Vec::new(),
             base_stale: true,
+            story: None,
+            parked: Vec::new(),
+            depth: None,
+            pending: Vec::new(),
+            track: Track::new(),
+            pressed: false,
+            story_at: tm::mono(),
+            base_at: 0.0,
         });
     }
 
@@ -259,7 +367,7 @@ impl App {
             s.fraction = fraction;
             s.waiting = false;
             s.last_dirty.clear();
-            s.interaction.reset();
+            s.cancel_input();
         }
     }
 
@@ -267,7 +375,7 @@ impl App {
     /// again with the right input region, and pointers are bound or let go.
     fn set_interactive(&mut self, on: bool, globals: &wayland_client::globals::GlobalList) {
         for s in &mut self.screens {
-            s.interaction.reset();
+            s.cancel_input();
         }
         self.restack();
         if !on {
@@ -313,10 +421,13 @@ impl App {
         s.waiting = false;
         s.fade = None;
         s.last_dirty.clear();
-        s.interaction.reset();
+        s.cancel_input();
         if !keep || s.shown.len() != w * h {
             s.shown.clear();
         }
+        // the same objects, wherever the new layout puts them
+        let seed = config().seed ^ ((s.id as u64) << 32);
+        s.attach_story(seed);
         self.rebase(true);
         self.draw(i, tm::mono());
     }
@@ -334,7 +445,7 @@ impl App {
     fn rebase(&mut self, instant: bool) {
         let mono = tm::mono();
         if !self.screens.iter().any(|s| s.cache.is_some() && crate::buffer::should_paint_base(s.open, s.dark, self.probe, !s.shown.is_empty())) {
-            for s in &mut self.screens { s.base_stale = true; s.fade = None; s.interaction.reset(); }
+            for s in &mut self.screens { s.base_stale = true; s.fade = None; s.cancel_input(); }
             self.next_base = mono + 3600.0;
             return;
         }
@@ -363,8 +474,7 @@ impl App {
         if moved {
             self.view = m.view;
             for s in self.screens.iter_mut() {
-                s.interaction.reset();
-                s.targets.clear();
+                s.cancel_input();
                 s.base_stale |= !self.probe && (!s.open || s.dark);
             }
             self.world.leave();
@@ -377,18 +487,31 @@ impl App {
             if !crate::buffer::should_paint_base(s.open, s.dark, self.probe, !s.shown.is_empty()) {
                 s.base_stale = true;
                 s.fade = None;
-                s.interaction.reset();
+                s.cancel_input();
                 continue;
             }
             if s.cache.as_ref().is_some_and(|c| c.view.id() != self.view.id()) {
                 let c = s.cache.take().unwrap();
                 s.cache = Some(Cache::new(self.view, config().seed, c.w, c.h));
+                // looking out somewhere else: that view's scene comes with it
+                let seed = config().seed ^ ((s.id as u64) << 32);
+                s.attach_story(seed);
             }
             let Some(cache) = &s.cache else { continue };
-            let (cv, anchors) = paint::render(&mut sc, cache);
+            // the picture is painted as the scene has left things, so nothing that was broken
+            // is mended by the sky being worked out afresh
+            let (cv, anchors) = match s.story.as_ref() {
+                Some(w) => paint::render_state(&mut sc, cache, &w.snapshot()),
+                None => paint::render(&mut sc, cache),
+            };
             let px = cv.finish(sc.p.grain);
             s.anchors = anchors;
-            s.targets = cache.stage.targets(&sc, &s.anchors);
+            if let Some(w) = s.story.as_mut() {
+                s.depth = cache.stage.story_depth(&w.snapshot());
+                // the whole picture was just painted: what was waiting to be repainted is in it
+                w.take_base_changes();
+            }
+            s.base_at = mono;
             let stale = std::mem::replace(&mut s.base_stale, false);
             if crate::buffer::replace_base(stale, instant, self.bent, moved, s.shown.len() == px.len()) {
                 s.shown = px;
@@ -478,10 +601,10 @@ impl App {
         if moving {
             let began = tm::mono();
             let now = self.scene_at.0 + (mono - self.scene_at.1);
-            let mut frame = Frame { w, h, px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: everywhere };
+            let depth = s.depth.as_ref().unwrap_or_else(|| cache.stage.depth());
+            let mut frame = Frame { w, h, px, dirty: &mut dirty, depth: Some(depth), behind: None, full_damage: everywhere };
             let mut d = Draw::new(&mut frame, &mut self.shaper);
-            self.world.draw(&mut d, sc, cache, &s.anchors, now, None);
-            s.interaction.draw(&mut d, sc, &cache.lay);
+            self.world.draw(&mut d, sc, cache, &s.anchors, now, s.story.as_ref());
             self.spent[3] += tm::mono() - began;
         }
         let dirty = if everywhere { vec![Rect { x0: 0, y0: 0, x1: w as i32, y1: h as i32 }] } else { coalesce(dirty, w as i32, h as i32) };
@@ -512,7 +635,12 @@ impl App {
         if self.world.everywhere() {
             // rain repaints the whole screen every frame, so it gets a film's frame rate; snow falls slower still
             fps.min(if self.world.raining() { 22.0 } else { 18.0 })
-        } else if self.world.lively() || self.screens.iter().any(|s| self.moving(s) && (s.interaction.active() || s.cache.as_ref().map_or(false, |c| c.stage.lively(sc, self.clock(tm::mono()))))) {
+        } else if self.world.lively()
+            || self.screens.iter().any(|s| {
+                self.moving(s)
+                    && (s.story.as_ref().is_some_and(|w| w.active()) || !s.pending.is_empty() || s.cache.as_ref().map_or(false, |c| c.stage.lively(sc, self.clock(tm::mono()))))
+            })
+        {
             fps
         } else if self.screens.iter().any(|s| s.fade.is_some() && self.seen(s)) {
             fps.min(20.0)
@@ -530,11 +658,34 @@ impl App {
         let dt = (mono - self.last_tick).clamp(0.0, 0.12) as f32;
         self.last_tick = mono;
         let began = tm::mono();
-        let paused = self.held || self.saver;
-        for s in &mut self.screens {
-            if !paused && ((s.open && !s.dark) || self.probe) {
-                s.interaction.step(dt, &s.targets);
-            } else { s.interaction.reset(); }
+        // each output's scene moves on by the time it has been looked at, and not otherwise: an
+        // output nobody can see, or one held still, keeps its story exactly where it was and
+        // takes no catching up when it returns
+        for i in 0..self.screens.len() {
+            let live = self.moving(&self.screens[i]);
+            let s = &mut self.screens[i];
+            if s.story.is_none() {
+                continue;
+            }
+            if !live {
+                s.story_at = mono;
+                s.cancel_input();
+                continue;
+            }
+            let gaps = std::mem::take(&mut s.pending);
+            let elapsed = (mono - s.story_at).max(0.0);
+            s.story_at = mono;
+            if let (Some(w), Some(sc)) = (s.story.as_mut(), self.scene.as_ref()) {
+                for g in gaps {
+                    w.gesture(g);
+                }
+                w.advance(elapsed, sc);
+            }
+        }
+        for i in 0..self.screens.len() {
+            if self.screens[i].story.as_ref().is_some_and(|w| w.has_base_changes()) && mono - self.screens[i].base_at >= 0.1 {
+                self.repaint(i, mono);
+            }
         }
         if let Some(sc) = self.scene.as_ref() {
             if self.screens.iter().any(|s| self.moving(s)) {
@@ -564,14 +715,138 @@ impl App {
         let Some(i) = self.screen(id) else { return };
         if !self.moving(&self.screens[i]) { return; }
         let s = &mut self.screens[i];
-        if let Some(cache) = &s.cache { s.interaction.motion(pointer_position(point, s.logical, &cache.lay)); }
+        // input is only recorded here: nothing is painted, nothing is stepped
+        if s.story.is_none() { return; }
+        let Some(p) = s.cache.as_ref().and_then(|c| pointer_position(point, s.logical, &c.lay)) else { return };
+        s.track.push(tm::mono(), p);
+        let g = if s.pressed { Gesture::Drag(p) } else { Gesture::Hover(p) };
+        s.queue(g);
     }
 
     fn leave(&mut self, seat_id: u32) {
         let Some(seat) = self.seats.iter_mut().find(|s| s.id == seat_id) else { return };
         let id = seat.focus.output;
         seat.focus.leave();
-        if let Some(i) = id.and_then(|id| self.screen(id)) { self.screens[i].interaction.motion(None); }
+        if let Some(i) = id.and_then(|id| self.screen(id)) {
+            // the pointer went away mid-gesture: the object is let go where it is
+            self.screens[i].cancel_input();
+        }
+    }
+
+    /// The primary button went down or up over the output the pointer is on.
+    fn button(&mut self, seat_id: u32, down: bool) {
+        let Some(seat) = self.seats.iter().find(|s| s.id == seat_id) else { return };
+        let Some(id) = seat.focus.output else { return };
+        let Some(point) = seat.focus.on(id) else { return };
+        let Some(i) = self.screen(id) else { return };
+        if !self.moving(&self.screens[i]) {
+            return;
+        }
+        let s = &mut self.screens[i];
+        if s.story.is_none() {
+            return;
+        }
+        let Some(p) = s.cache.as_ref().and_then(|c| pointer_position(point, s.logical, &c.lay)) else { return };
+        let now = tm::mono();
+        if down {
+            s.pressed = true;
+            s.track.reset();
+            s.track.push(now, p);
+            s.queue(Gesture::Press(p));
+        } else if std::mem::take(&mut s.pressed) {
+            s.track.push(now, p);
+            let velocity = s.track.velocity(now, MAX_THROW);
+            s.queue(Gesture::Release { at: p, velocity });
+        }
+    }
+
+    /// Repaint, from the scene's own state, just the parts of the base picture that changed.
+    fn repaint(&mut self, i: usize, mono: f64) {
+        let Some(sc) = self.scene.as_mut() else { return };
+        let s = &mut self.screens[i];
+        let (Some(w), Some(cache)) = (s.story.as_mut(), s.cache.as_ref()) else { return };
+        if s.shown.len() != cache.w * cache.h {
+            return;
+        }
+        let regions = w.take_base_changes();
+        if regions.is_empty() {
+            return;
+        }
+        let (cv, _) = {
+            let snap = w.snapshot();
+            paint::render_state(sc, cache, &snap)
+        };
+        let fresh = cv.finish(sc.p.grain);
+        let rects: Vec<crate::gfx::Rect> = regions.iter().map(|r| crate::story::pixel_rect(r, &cache.lay, crate::story::LIGHT_MARGIN)).collect();
+        crate::buffer::install_regions(&mut s.shown, &fresh, cache.w, &rects);
+        s.depth = cache.stage.story_depth(&w.snapshot());
+        // rows of the shown picture that changed are stale in both buffers
+        if let (Some(rows), Some(pool)) = (crate::buffer::rows_of(&rects, cache.h), s.pool.as_mut()) {
+            for b in pool.bufs.iter_mut() {
+                b.stale = Some(match b.stale {
+                    Some((a0, a1)) => (a0.min(rows.0), a1.max(rows.1)),
+                    None => rows,
+                });
+            }
+        }
+        // a cross-fade in progress shows the old base: let it finish into the new one
+        if s.fade.is_some() {
+            s.to = s.shown.clone();
+        }
+        s.base_at = mono;
+    }
+
+    /// The panel's scene tools: start an incident, pause, step, reset. Nothing here is saved or
+    /// changes the sky; a panel that has closed no longer holds the scenes paused.
+    fn scene_commands(&mut self) {
+        let command = sources::dev_scene();
+        let Some(c) = command else {
+            for s in &mut self.screens {
+                if let Some(w) = s.story.as_mut() {
+                    if w.paused() {
+                        w.set_paused(false);
+                    }
+                }
+            }
+            self.scene_serial = 0;
+            return;
+        };
+        let serial = c.get("serial").and_then(|v| v.as_u64()).unwrap_or(0);
+        let paused = c.get("pause").and_then(|v| v.as_bool()).unwrap_or(false);
+        let fresh = serial > self.scene_serial;
+        self.scene_serial = self.scene_serial.max(serial);
+        for s in &mut self.screens {
+            let Some(w) = s.story.as_mut() else { continue };
+            w.set_paused(paused);
+            if !fresh {
+                continue;
+            }
+            if c.get("reset").and_then(|v| v.as_bool()) == Some(true) {
+                w.reset();
+            }
+            if let Some(name) = c.get("trigger").and_then(|v| v.as_str()) {
+                let id = w.definition().stories.iter().find(|st| st.name == name).map(|st| st.id);
+                if let Some(id) = id {
+                    w.trigger(id);
+                }
+            }
+            if c.get("step").and_then(|v| v.as_bool()) == Some(true) {
+                w.step_once();
+            }
+        }
+    }
+
+    /// When the soonest scene on a visible output next has something to do on its own.
+    fn story_due(&self) -> Option<f64> {
+        self.screens
+            .iter()
+            .filter(|s| self.moving(s))
+            .filter_map(|s| {
+                let w = s.story.as_ref()?;
+                let at = w.next_deadline()?;
+                Some(s.story_at + (at - w.time()).max(0.0))
+            })
+            .reduce(f64::min)
     }
 }
 
@@ -732,15 +1007,11 @@ impl Dispatch<wl_pointer::WlPointer, u32> for App {
             }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => app.motion(*seat_id, (surface_x, surface_y)),
             wl_pointer::Event::Leave { .. } => app.leave(*seat_id),
-            wl_pointer::Event::Button { button, state, .. } if button == 0x110 && matches!(state.into_result(), Ok(wl_pointer::ButtonState::Pressed)) => {
-                let Some(seat) = app.seats.iter().find(|s| s.id == *seat_id) else { return };
-                let Some(id) = seat.focus.output else { return };
-                let Some(point) = seat.focus.on(id) else { return };
-                let Some(i) = app.screen(id) else { return };
-                if !app.moving(&app.screens[i]) { return; }
-                let s = &mut app.screens[i];
-                if let Some(p) = s.cache.as_ref().and_then(|c| pointer_position(point, s.logical, &c.lay)) {
-                    s.interaction.click(p, tm::mono(), &s.targets);
+            wl_pointer::Event::Button { button, state, .. } if button == 0x110 => {
+                match state.into_result() {
+                    Ok(wl_pointer::ButtonState::Pressed) => app.button(*seat_id, true),
+                    Ok(wl_pointer::ButtonState::Released) => app.button(*seat_id, false),
+                    _ => {}
                 }
             }
             _ => {}
@@ -882,6 +1153,8 @@ pub fn run() -> i32 {
         probe: std::env::var("DORMER_PROBE").is_ok(),
         spent: [0.0; 4],
         frames: 0,
+        scene_serial: 0,
+        dev_seen: sources::dev_signature(),
     };
     let outputs: Vec<(u32, u32)> = globals.contents().with_list(|list| list.iter().filter(|g| g.interface == "wl_output").map(|g| (g.name, g.version)).collect());
     for (name, version) in outputs {
@@ -985,7 +1258,11 @@ pub fn run() -> i32 {
             probe_due = mono + 5.0;
         }
         let pace = app.pace();
+        let due = app.story_due();
         if pace > 0.0 && mono - app.last_tick >= 1.0 / pace - 0.002 {
+            app.tick(mono);
+        } else if due.is_some_and(|t| mono >= t) {
+            // nothing is moving, but a job has fallen due: one step to start it
             app.tick(mono);
         }
         if conn.flush().is_err() {
@@ -998,7 +1275,7 @@ pub fn run() -> i32 {
         if pace > 0.0 {
             wake = wake.min(app.last_tick + 1.0 / pace);
         }
-        for due in [look_due, restack_due, rebase_due].into_iter().flatten() {
+        for due in [look_due, restack_due, rebase_due, app.story_due()].into_iter().flatten() {
             wake = wake.min(due);
         }
         let timeout = ((wake - mono).max(0.0) * 1000.0).ceil() as i32;
@@ -1037,14 +1314,15 @@ pub fn run() -> i32 {
             // the dev panel moved a slider, `dormer pretend` changed the weather, `dormer view` chose
             // another view, or a draw left new state
             let mut raw = [0u8; 4096];
-            let (mut mine, mut config_changed) = (false, false);
+            let (mut mine, mut config_changed, mut dev_changed) = (false, false, false);
             loop {
                 let n = unsafe { libc::read(watch, raw.as_mut_ptr() as *mut libc::c_void, raw.len()) };
                 if n <= 0 {
                     break;
                 }
                 let text = String::from_utf8_lossy(&raw[..n as usize]);
-                mine |= ["dev.json", "pretend.json", "state.json", "view"].iter().any(|name| text.contains(name));
+                mine |= ["pretend.json", "state.json", "view"].iter().any(|name| text.contains(name));
+                dev_changed |= text.contains("dev.json");
                 config_changed |= text.contains("config.toml");
             }
             if config_changed {
@@ -1061,6 +1339,16 @@ pub fn run() -> i32 {
                     Ok(false) => {}
                     // a half-typed edit: keep what is in force, and say why
                     Err(e) => eprintln!("dormer: settings not reloaded, keeping the previous ones: {}", e),
+                }
+            }
+            if dev_changed {
+                // the scene tools act at once; the sky is only worked out again if the panel
+                // has changed what it holds it to
+                app.scene_commands();
+                let signature = sources::dev_signature();
+                if signature != app.dev_seen {
+                    app.dev_seen = signature;
+                    mine = true;
                 }
             }
             if mine {
@@ -1097,59 +1385,60 @@ pub fn run() -> i32 {
 
 /// Run the world for a while without a screen and save what it would be showing.
 pub fn one_frame(path: &str, seconds: f64, m: &Moment, size: (usize, usize), seed: u64, pointer: Option<crate::gfx::P>, click: Option<crate::gfx::P>) -> Result<(), String> {
-    let cache = Cache::new(m.view, seed, size.0, size.1);
-    let mut sc = build(m, None);
-    sc.live = true;
-    let (cv, anchors) = paint::render(&mut sc, &cache);
-    let targets = cache.stage.targets(&sc, &anchors);
-    let mut interaction = crate::interaction::Interaction::new();
-    interaction.motion(pointer);
-    if let Some(p) = click { interaction.click(p, 0.0, &targets); }
-    let mut px = cv.finish(sc.p.grain);
-    let mut world = World::new(7);
-    world.retune(&sc, anchors.flicker.len());
-    let src = Sources::from(&anchors, &cache.lay);
-    if sc.eph.sun.el > -3.0 {
-        world.spawn_flock(Some(520.0));
-        world.spawn_flock(Some(1050.0));
+    use crate::story::replay::Session;
+    // the ambient world keeps the seed it always had, so older exports keep their pictures
+    let mut sess = Session::with_live_seed(m, size, seed, 7)?;
+    if let Some(p) = pointer {
+        sess.gesture(Gesture::Hover(p));
+    }
+    if sess.sc.eph.sun.el > -3.0 {
+        sess.live_mut().spawn_flock(Some(520.0));
+        sess.live_mut().spawn_flock(Some(1050.0));
     }
     let steps = (seconds * 30.0) as usize;
+    let perch = sess.sources().perch;
     for k in 0..steps {
+        if k == 0 {
+            if let Some(p) = click {
+                // the old test flag: a touch is a press and a release on the same place
+                sess.gesture(Gesture::Press(p));
+            }
+        }
+        if k == 3 {
+            if let Some(p) = click {
+                sess.gesture(Gesture::Release { at: p, velocity: (0.0, 0.0) });
+            }
+        }
         if k == steps.saturating_sub(14) {
-            world.spawn_meteor();
-            if let Some(b) = src.perch {
+            sess.live_mut().spawn_meteor();
+            if let Some(b) = perch {
                 if m.ts as i64 % 3600 < 60 {
-                    world.scatter(b);
+                    sess.live_mut().scatter(b);
                 }
             }
         }
-        world.step(1.0 / 30.0, &sc, &src, m.ts + k as f64 / 30.0);
-        interaction.step(1.0 / 30.0, &targets);
+        sess.advance(1.0 / 30.0, 1.0 / 30.0);
     }
+    sess.settle();
+    let (w, h) = (sess.cache.w, sess.cache.h);
+    let mut px = sess.shown.clone();
     let mut dirty = Vec::new();
     let mut shaper = Shaper::new();
-    let mut frame = Frame { w: cache.w, h: cache.h, px: &mut px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: false };
-    let mut d = Draw::new(&mut frame, &mut shaper);
-    world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds, None);
-    interaction.draw(&mut d, &sc, &cache.lay);
-    drop(d);
+    sess.draw_over(&mut px, &mut dirty, &mut shaper, false);
     // how long a frame of this takes to draw
     let began = std::time::Instant::now();
     for _ in 0..50 {
         let (mut scratch, mut marks) = (px.clone(), Vec::new());
-        let mut frame = Frame { w: cache.w, h: cache.h, px: &mut scratch, dirty: &mut marks, depth: Some(cache.stage.depth()), behind: None, full_damage: world.everywhere() };
-        let mut d = Draw::new(&mut frame, &mut shaper);
-        world.draw(&mut d, &sc, &cache, &anchors, m.ts + seconds, None);
-        interaction.draw(&mut d, &sc, &cache.lay);
+        sess.draw_over(&mut scratch, &mut marks, &mut shaper, sess.live_everywhere());
     }
     let copy = std::time::Instant::now();
     for _ in 0..50 {
         std::hint::black_box(px.clone());
     }
     let per = (began.elapsed().as_secs_f64() - 2.0 * copy.elapsed().as_secs_f64()) / 50.0 * 1e3;
-    let rects = coalesce(dirty, cache.w as i32, cache.h as i32);
+    let rects = coalesce(dirty, w as i32, h as i32);
     let area: i64 = rects.iter().map(|r| r.area()).sum();
-    crate::gfx::save_png(path, cache.w, cache.h, &px)?;
-    println!("{}  damage: {} rectangles, {:.1}% of the screen; {:.2} ms to draw", path, rects.len(), area as f64 / (cache.w * cache.h) as f64 * 100.0, per);
+    crate::gfx::save_png(path, w, h, &px)?;
+    println!("{}  damage: {} rectangles, {:.1}% of the screen; {:.2} ms to draw", path, rects.len(), area as f64 / (w * h) as f64 * 100.0, per);
     Ok(())
 }

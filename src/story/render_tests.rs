@@ -118,6 +118,18 @@ impl Stage for Yard {
         Some(self.pole_depth(state.in_base(POLE)))
     }
 
+    fn story(&self) -> Option<Definition> {
+        use super::director::{Class, Step, StoryDef, Trigger};
+        Some(Definition {
+            view: "yard",
+            objects: objects(),
+            stories: vec![StoryDef::new(1, "mend_sign", Class::Incident, Trigger::Damage(SIGN, Damage::Damaged))
+                .stage("start", vec![Step::Wait(6.0), Step::SetState { obj: SIGN, change: super::director::Change::Restore }, Step::End])
+                .stage("cleanup", vec![Step::SetState { obj: SIGN, change: super::director::Change::Restore }, Step::End])],
+            ..Default::default()
+        })
+    }
+
     fn story_alive(&self, d: &mut Draw<Frame>, _sc: &Scene, state: &Snapshot, _t: f32, indoors: bool) {
         if indoors {
             return;
@@ -358,3 +370,85 @@ fn a_scene_with_no_changes_paints_exactly_what_render_does() {
     let _ = mix([0.0; 3], [1.0; 3], 0.5);
 }
 
+
+fn session(size: (usize, usize)) -> super::replay::Session {
+    let settings = crate::settings::RuntimeSettings::default();
+    let m = crate::replay_moment(&YARD, None, Some("clear"), None, &settings).unwrap();
+    super::replay::Session::new(&m, size, 5).unwrap()
+}
+
+/// The same colour to within the picture's grain.
+fn alike(a: u32, b: u32) -> bool {
+    (0..3).all(|k| ((a >> (8 * k)) & 255).abs_diff((b >> (8 * k)) & 255) <= 3)
+}
+
+fn sign_pixel(s: &super::replay::Session, p: &[u32]) -> u32 {
+    let (x, y) = (s.cache.lay.dx(SIGN_AT.0 + 40.0), s.cache.lay.dy(SIGN_AT.1 - 15.0));
+    p[y as usize * s.cache.w + x as usize] & 0x00FF_FFFF
+}
+
+#[test]
+fn damage_survives_the_refresh_and_is_mended_by_its_story_only() {
+    let mut s = session((640, 400));
+    let wall = {
+        let (x, y) = (s.cache.lay.dx(100.0), s.cache.lay.dy(SIGN_AT.1 - 15.0));
+        s.shown[y as usize * 640 + x as usize] & 0x00FF_FFFF
+    };
+    let intact = sign_pixel(&s, &s.shown);
+    assert_ne!(intact, wall, "the sign is there to begin with");
+    // the sign is damaged: the base is repainted there, and only there
+    s.story.objects_mut().get_mut(SIGN).unwrap().damage = Damage::Damaged;
+    s.advance(0.5, 1.0 / 30.0);
+    assert!(alike(sign_pixel(&s, &s.shown), wall), "its far end has dropped, showing the wall");
+    assert!(s.base_repaints >= 1 && s.widest_repaint < 0.2, "{} repaints, widest {}", s.base_repaints, s.widest_repaint);
+    // the sky is worked out afresh in the middle of the repair: nothing is mended by it
+    s.advance(2.0, 1.0 / 30.0);
+    s.refresh();
+    assert!(alike(sign_pixel(&s, &s.shown), wall));
+    assert_eq!(s.story.snapshot().damage(SIGN), Damage::Damaged);
+    // the story finishes its work: only then is it whole again
+    s.advance(8.0, 1.0 / 30.0);
+    assert_eq!(s.story.snapshot().damage(SIGN), Damage::Intact);
+    let frame = s.frame();
+    assert!(alike(sign_pixel(&s, &frame), intact));
+}
+
+#[test]
+fn a_held_scene_does_not_age_and_resumes_exactly() {
+    let mut s = session((320, 200));
+    s.story.objects_mut().get_mut(SIGN).unwrap().damage = Damage::Damaged;
+    s.advance(1.0, 1.0 / 30.0);
+    let (t, ticks) = (s.story.time(), s.story.ticks_run);
+    s.story.set_paused(true);
+    // a long stretch of wall time passes while it is held: nothing happens
+    for _ in 0..600 {
+        s.story.step_facts(0.1, &super::Facts::default());
+    }
+    assert_eq!((s.story.time(), s.story.ticks_run), (t, ticks), "held scenes take no ticks");
+    s.story.set_paused(false);
+    // and resuming is one frame's worth, not the ten minutes it was held for
+    let n = s.story.step_facts(600.0, &super::Facts::default());
+    assert!(n <= 3, "{} ticks after a long gap", n);
+    // the damage is where it was left
+    assert_eq!(s.story.snapshot().damage(SIGN), Damage::Damaged);
+}
+
+#[test]
+fn a_resize_keeps_the_same_objects_wherever_they_land() {
+    let mut s = session((640, 400));
+    s.story.objects_mut().get_mut(SIGN).unwrap().damage = Damage::Broken;
+    s.story.objects_mut().get_mut(SIGN).unwrap().pose = Pose { dx: 12.0, dy: 30.0, turn: 0.4 };
+    // the same view at another size and shape
+    let (wide, tall) = ((1280, 400), (400, 640));
+    for size in [wide, tall] {
+        let cache = Cache::new(&YARD, 5, size.0, size.1);
+        s.story.rebind(cache.stage.story().unwrap()).unwrap();
+        let st = s.story.objects().get(SIGN).unwrap();
+        assert_eq!((st.damage, st.pose.dy), (Damage::Broken, 30.0));
+    }
+    // and the world of two outputs are independent of each other
+    let mut a = session((320, 200));
+    let b = session((320, 200));
+    a.story.objects_mut().get_mut(SIGN).unwrap().damage = Damage::Missing;
+    assert_eq!(b.story.snapshot().damage(SIGN), Damage::Intact);
+}

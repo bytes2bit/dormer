@@ -292,8 +292,7 @@ impl Layout {
                             targets.push((bar, ControlId::Slider(row.field)));
                         }
                     }
-                    Shape::Toggle => targets.push((row.value, ControlId::Toggle(row.field)),
-                    ),
+                    Shape::Toggle | Shape::Button => targets.push((row.value, ControlId::Toggle(row.field))),
                     Shape::Choice => {
                         let v = row.value;
                         targets.push((CellRect::new(v.x, v.y, 2, 1), ControlId::Step(row.field, -1)));

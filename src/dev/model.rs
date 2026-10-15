@@ -22,10 +22,12 @@ pub enum Category {
     Machine,
     Activity,
     View,
+    /// the incidents of this view, to start by hand, and the controls of the playback
+    Scenes,
 }
 
 impl Category {
-    pub const ALL: [Category; 5] = [Category::Appearance, Category::Sky, Category::Machine, Category::Activity, Category::View];
+    pub const ALL: [Category; 6] = [Category::Appearance, Category::Sky, Category::Machine, Category::Activity, Category::View, Category::Scenes];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -34,6 +36,7 @@ impl Category {
             Category::Machine => "Machine preview",
             Category::Activity => "Activity",
             Category::View => "This view",
+            Category::Scenes => "Scenes",
         }
     }
 
@@ -45,6 +48,7 @@ impl Category {
             Category::Machine => "Machine",
             Category::Activity => "Activity",
             Category::View => "View",
+            Category::Scenes => "Scenes",
         }
     }
 }
@@ -65,6 +69,14 @@ pub enum Field {
     Planes,
     Stories,
     Knob(&'static str),
+    /// start the nth incident of this view
+    Story(u8),
+    /// hold every scene where it is, or let it go on
+    ScenePause,
+    /// run one tick
+    SceneStep,
+    /// everything back to an ordinary scene
+    SceneReset,
 }
 
 impl Field {
@@ -76,6 +88,7 @@ impl Field {
             Field::Channel(_) => Category::Sky,
             Field::Birds | Field::Meteors | Field::Planes | Field::Stories => Category::Activity,
             Field::Knob(_) => Category::View,
+            Field::Story(_) | Field::ScenePause | Field::SceneStep | Field::SceneReset => Category::Scenes,
         }
     }
 }
@@ -85,6 +98,8 @@ pub enum Shape {
     Slider,
     Toggle,
     Choice,
+    /// does something when pressed; holds no value
+    Button,
 }
 
 /// How one field is presented and bounded.
@@ -194,9 +209,20 @@ pub enum Action {
     Scroll(i32),
 }
 
+/// What the panel asks of the running scenes. None of it is a setting, so none of it is saved.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SceneCommand {
+    Trigger(String),
+    Pause(bool),
+    Step,
+    Reset,
+}
+
 /// What the caller must do about it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
+    /// a scene tool was used
+    Scene(SceneCommand),
     /// the draft changed: show it on the wallpaper
     Publish,
     Save { policy: SavePolicy, exit: bool },
@@ -258,6 +284,9 @@ pub struct Model {
     pub capture: Option<Capture>,
     pub status: Status,
     pub config_path: PathBuf,
+    /// the incidents and daily activities of the view being edited, by name
+    pub stories: Vec<String>,
+    pub scenes_paused: bool,
     /// the clock the caller keeps for the panel, in monotonic seconds
     pub now: f64,
     pub peek_until: f64,
@@ -282,12 +311,20 @@ impl Model {
             capture: None,
             status: Status::Idle,
             config_path,
+            stories: Vec::new(),
+            scenes_paused: false,
             now: 0.0,
             peek_until: 0.0,
             exit_after_save: false,
         };
         m.category = Category::Sky;
         m
+    }
+
+    /// The view has changed or is new: which stories it has, for the scene tools.
+    pub fn set_stories(&mut self, names: Vec<String>) {
+        self.stories = names;
+        self.normalise_focus();
     }
 
     /// The layout has settled on where the list starts.
@@ -317,6 +354,8 @@ impl Model {
             Category::Machine => Channel::ALL.iter().filter(|c| c.is_machine()).map(|c| Field::Channel(*c)).collect(),
             Category::Activity => vec![Field::Birds, Field::Meteors, Field::Planes, Field::Stories],
             Category::View => self.view().knobs().iter().map(|k| Field::Knob(k.key)).collect(),
+            Category::Scenes if self.stories.is_empty() => Vec::new(),
+            Category::Scenes => (0..self.stories.len().min(24)).map(|i| Field::Story(i as u8)).chain([Field::ScenePause, Field::SceneStep, Field::SceneReset]).collect(),
         }
     }
 
@@ -392,6 +431,53 @@ impl Model {
                 Some(k) => sourced(slider(k.label, k.lo, k.hi, k.step, k.big, "a control of this view only")),
                 None => slider(key, 0.0, 1.0, 0.1, 0.5, ""),
             },
+            Field::Story(i) => {
+                let name = self.stories.get(i as usize).cloned().unwrap_or_default();
+                Info {
+                    label: name.replace('_', " "),
+                    shape: Shape::Button,
+                    lo: 0.0,
+                    hi: 0.0,
+                    step: 0.0,
+                    big: 0.0,
+                    sourced: false,
+                    on_save: false,
+                    help: "start it now, on this view; it is never saved, and ends by itself".into(),
+                }
+            }
+            Field::ScenePause => Info {
+                label: "pause scenes".into(),
+                shape: Shape::Toggle,
+                lo: 0.0,
+                hi: 1.0,
+                step: 1.0,
+                big: 1.0,
+                sourced: false,
+                on_save: false,
+                help: "hold everything where it is; resume with the same control".into(),
+            },
+            Field::SceneStep => Info {
+                label: "step one tick".into(),
+                shape: Shape::Button,
+                lo: 0.0,
+                hi: 0.0,
+                step: 0.0,
+                big: 0.0,
+                sourced: false,
+                on_save: false,
+                help: "advance the scenes by 1/30 of a second (while paused or not)".into(),
+            },
+            Field::SceneReset => Info {
+                label: "reset scenes".into(),
+                shape: Shape::Button,
+                lo: 0.0,
+                hi: 0.0,
+                step: 0.0,
+                big: 0.0,
+                sourced: false,
+                on_save: false,
+                help: "end every incident, send everyone home, mend everything".into(),
+            },
         }
     }
 
@@ -431,6 +517,8 @@ impl Model {
             Field::Birds => s.rates.birds as f64,
             Field::Meteors => s.rates.meteors as f64,
             Field::Planes => s.rates.planes as f64,
+            Field::Story(_) | Field::SceneStep | Field::SceneReset => 0.0,
+            Field::ScenePause => self.scenes_paused as u8 as f64,
             Field::Knob(k) => s
                 .views
                 .get(self.view().id())
@@ -502,6 +590,10 @@ impl Model {
                 }
             }
             Field::Knob(k) => self.knob(k).map(|k| (k.show)(v)).unwrap_or_default(),
+            Field::Story(_) => "start".into(),
+            Field::ScenePause => if self.scenes_paused { "paused" } else { "running" }.into(),
+            Field::SceneStep => "step".into(),
+            Field::SceneReset => "reset".into(),
         }
     }
 
@@ -986,7 +1078,7 @@ impl Model {
         let info = self.info(f);
         self.touched();
         match info.shape {
-            Shape::Toggle => self.toggle(f),
+            Shape::Toggle | Shape::Button => self.toggle(f),
             Shape::Choice => {
                 let n = (info.hi + 1.0) as i64;
                 let at = self.value(f) as i64;
@@ -1002,6 +1094,22 @@ impl Model {
     }
 
     fn toggle(&mut self, f: Field) -> Vec<Effect> {
+        // the scene tools do things; they change no setting
+        match f {
+            Field::Story(i) => {
+                return self.stories.get(i as usize).cloned().map(|n| vec![Effect::Scene(SceneCommand::Trigger(n))]).unwrap_or_default();
+            }
+            Field::ScenePause => {
+                self.scenes_paused = !self.scenes_paused;
+                return vec![Effect::Scene(SceneCommand::Pause(self.scenes_paused))];
+            }
+            Field::SceneStep => return vec![Effect::Scene(SceneCommand::Step)],
+            Field::SceneReset => {
+                self.scenes_paused = false;
+                return vec![Effect::Scene(SceneCommand::Reset)];
+            }
+            _ => {}
+        }
         let on = self.value(f) > 0.5;
         match self.info(f).shape {
             Shape::Choice => {
@@ -1030,6 +1138,8 @@ impl Model {
         let before = self.draft.edited.clone();
         let edited = &mut self.draft.edited;
         match f {
+            // tools, not settings
+            Field::Story(_) | Field::ScenePause | Field::SceneStep | Field::SceneReset => return Vec::new(),
             Field::View => {
                 if let Some(view) = views::ALL.get(v.round().max(0.0) as usize) {
                     edited.view = view.id().to_string();
@@ -1099,6 +1209,7 @@ impl Model {
         let saved = self.draft.saved.clone();
         let e = &mut self.draft.edited;
         match f {
+            Field::Story(_) | Field::ScenePause | Field::SceneStep | Field::SceneReset => return Vec::new(),
             Field::View => e.view = saved.view.clone(),
             Field::Mode => e.mode = saved.mode.clone(),
             Field::Fps => e.fps = saved.fps,

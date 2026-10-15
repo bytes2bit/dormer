@@ -142,8 +142,6 @@ pub trait Stage {
 
     fn lights(&self, sc: &Scene) -> Lights;
 
-    fn targets(&self, _sc: &Scene, _anchors: &Anchors) -> Vec<crate::interaction::Target> { Vec::new() }
-
     /// What this view lets a living scene change: its objects, routes and stories. None where
     /// nothing in the view is interactive.
     fn story(&self) -> Option<crate::story::Definition> {

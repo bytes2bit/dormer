@@ -35,7 +35,7 @@ use crate::{build, launcher, raw_moment, with_overrides, Moment};
 
 use input::{Decoder, Key};
 use layout::{Button, ControlId, Layout};
-use model::{Action, Choice, Dialog, Effect, Field, Model, Reality, Shape};
+use model::{Action, Choice, Dialog, Effect, Field, Model, Reality, SceneCommand, Shape};
 
 /// Without the living wallpaper running, each change is drawn to the still wallpaper in the background.
 struct Painter {
@@ -75,6 +75,11 @@ struct Panel {
     /// a button the mouse went down on, which fires if it is released there
     armed: Option<ControlId>,
     size: (u16, u16),
+    /// what the scene tools have asked of the running scenes: a serial the wallpaper uses to tell
+    /// a new command from one it has seen, the playback state, and one-shot commands
+    scene_serial: u64,
+    scene_paused: bool,
+    scene_once: (Option<String>, bool, bool),
 }
 
 impl Panel {
@@ -105,6 +110,9 @@ impl Panel {
             published_at: 0.0,
             armed: None,
             size,
+            scene_serial: 0,
+            scene_paused: false,
+            scene_once: (None, false, false),
         };
         match ConfigFile::open(&path) {
             Ok(f) => p.file = Some(f),
@@ -151,8 +159,10 @@ impl Panel {
         let mut m = base.at(tm::now());
         let _ = crate::settings::runtime().apply_except(&mut m, &auto);
         with_overrides(&set, &mut m);
-        if m.view.id() != self.cache.view.id() {
+        if m.view.id() != self.cache.view.id() || self.model.stories.is_empty() && self.cache.stage.story().is_some() {
             self.cache = Cache::new(m.view, config().seed, 320, 200);
+            let names = self.cache.stage.story().map(|d| d.stories.iter().map(|s| s.name.to_string()).collect()).unwrap_or_default();
+            self.model.set_stories(names);
         }
         let held = std::mem::take(&mut m.knobs);
         let free = build(&m, None);
@@ -172,11 +182,16 @@ impl Panel {
         self.pending = false;
         self.published_at = tm::mono();
         let (set, auto) = self.model.overrides();
-        if set.is_empty() && auto.is_empty() {
+        if set.is_empty() && auto.is_empty() && self.scene_serial == 0 {
             // nothing held that the saved settings do not already say: the preview is the saved scene
             let _ = std::fs::remove_file(cache_file("dev.json"));
         } else {
-            sources::write_atomic(&cache_file("dev.json"), &json!({"pid": std::process::id(), "set": set, "auto": auto}).to_string());
+            let mut doc = json!({"pid": std::process::id(), "set": set, "auto": auto});
+            if self.scene_serial > 0 {
+                let (trigger, step, reset) = std::mem::take(&mut self.scene_once);
+                doc["scene"] = json!({"serial": self.scene_serial, "pause": self.scene_paused, "trigger": trigger, "step": step, "reset": reset});
+            }
+            sources::write_atomic(&cache_file("dev.json"), &doc.to_string());
         }
         self.describe();
         let _ = self.painter.changed.try_send(());
@@ -195,6 +210,20 @@ impl Panel {
                     queue.extend(self.model.save_finished(result));
                 }
                 Effect::Reload => self.reload(),
+                Effect::Scene(cmd) => {
+                    // a command for the running scenes: sent through dev.json, never saved
+                    self.scene_serial += 1;
+                    match cmd {
+                        SceneCommand::Trigger(name) => self.scene_once.0 = Some(name),
+                        SceneCommand::Pause(p) => self.scene_paused = p,
+                        SceneCommand::Step => self.scene_once.1 = true,
+                        SceneCommand::Reset => {
+                            self.scene_once.2 = true;
+                            self.scene_paused = false;
+                        }
+                    }
+                    self.pending = true;
+                }
             }
         }
         false
@@ -291,10 +320,10 @@ fn translate(model: &Model, layout: &Layout, key: Key, armed: &mut Option<Contro
         Key::BigRight | Key::Char(']' | 'L') => vec![Action::Big(focus, 1.0)],
         Key::Home => vec![Action::SetValue(focus, info.lo)],
         Key::End => vec![Action::SetValue(focus, info.hi)],
-        Key::Enter if info.shape == Shape::Toggle => vec![Action::Toggle(focus)],
+        Key::Enter if matches!(info.shape, Shape::Toggle | Shape::Button) => vec![Action::Toggle(focus)],
         Key::Enter => vec![Action::EditStart],
         Key::Char(' ') => match (info.shape, model.fixed(focus)) {
-            (Shape::Toggle, _) | (Shape::Choice, _) => vec![Action::Toggle(focus)],
+            (Shape::Toggle, _) | (Shape::Choice, _) | (Shape::Button, _) => vec![Action::Toggle(focus)],
             (_, Some(true)) => vec![Action::SetAuto(focus)],
             _ => vec![Action::SetValue(focus, model.value(focus))],
         },
