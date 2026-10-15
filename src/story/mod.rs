@@ -9,6 +9,7 @@
 //! The pieces are wired in one at a time; until the last of them is, some are not yet used.
 #![allow(dead_code)]
 
+pub mod events;
 pub mod model;
 
 pub use model::*;
