@@ -56,8 +56,9 @@ with the README and `dormer explain`.
 | `src/words.rs` | `dormer explain`: shared sky descriptions plus each view's words. |
 
 The registered view IDs are `rooftops` (`rooftops.rs`), `street` (`street.rs`),
-`city` (`downtown.rs`), `coast` (`coast.rs`), `moon` (`moonbase.rs`), and `vale`
-(`vale.rs`). CLI IDs do not always match filenames. All use `Sky::Home` except
+`city` (`downtown.rs`), `coast` (`coast.rs`) and `moon` (`moonbase.rs`). The
+former `vale` view is retired: `views::RETIRED` maps a saved `vale` choice to
+`rooftops` with a diagnostic, and `--view vale` is refused. CLI IDs do not always match filenames. All use `Sky::Home` except
 `moon`, which uses `Sky::Void` and paints its own heavens.
 
 ## Rendering and extension contracts
@@ -252,7 +253,7 @@ target/release/dormer draw --out /tmp/dormer-preview/street.png \
 target/release/dormer sheet /tmp/dormer-preview/sheet.png --size 640x400 \
   '2026-10-13 07:10,clear,rooftops' '2026-10-13 21:00,rain,street' \
   '2026-10-13 21:00,clear,city' '2026-10-13 18:00,storm,coast' \
-  '2026-10-13 21:00,clear,moon' '2026-10-13 08:00,snow,vale'
+  '2026-10-13 21:00,clear,moon' '2026-10-13 08:00,snow,coast'
 
 target/release/dormer live --frame /tmp/dormer-preview/live.png \
   --view street --size 640x400 --at '2026-10-13 21:00' \

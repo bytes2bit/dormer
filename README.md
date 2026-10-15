@@ -23,7 +23,6 @@ fill:
 | `city` | The middle of town across a railway viaduct: towers placed by hand, offices that keep office hours, trains to a timetable. |
 | `coast` | A headland and its lighthouse over the strait: the sea mirrors the sky, and the tide follows the moon. |
 | `moon` | A station on the Lake of Dreams. The earth hangs overhead with its true face and phase; the sun is up for a fortnight and down for a fortnight. |
-| `vale` | A valley of hanging rocks, a wizard's tower and a great tree, with a second, ringed moon that keeps the week. |
 
 ```sh
 dormer view            # list them
@@ -33,11 +32,11 @@ dormer view default    # back to what the config says
 
 Your machine shows in the same four ways everywhere, staged for the place:
 
-| | rooftops | street | city | coast | moon | vale |
-| --- | --- | --- | --- | --- | --- | --- |
-| An AI coding agent is running | the lamp in the roof room | the neighbour across the way at their desk, working by the lamp | the lantern on the tallest tower | the lamp in the keeper's window | the lamp in the cupola | the lamp in the tower's top room |
-| Each running Docker container | a blue window under it | a blue jar lit on their fire escape | a blue floor under it | a blue lantern on a moored boat | a cargo pod lit blue | a rune lit blue on a standing stone |
-| The processor is working hard | smoke from its stovepipe | steam from a manhole in the road | steam off the tower's roof | smoke from the lean-to's stovepipe | the vent blowing, the radiators glowing | violet smoke from the flue |
+| | rooftops | street | city | coast | moon |
+| --- | --- | --- | --- | --- | --- |
+| An AI coding agent is running | the lamp in the roof room | the neighbour across the way at their desk, working by the lamp | the lantern on the tallest tower | the lamp in the keeper's window | the lamp in the cupola |
+| Each running Docker container | a blue window under it | a blue jar lit on their fire escape | a blue floor under it | a blue lantern on a moored boat | a cargo pod lit blue |
+| The processor is working hard | smoke from its stovepipe | steam from a manhole in the road | steam off the tower's roof | smoke from the lean-to's stovepipe | the vent blowing, the radiators glowing |
 | Sound is playing | notes drift from it | the neighbour picks up the guitar; notes drift from their window | notes drift from it | notes drift from it | notes drift from it |
 
 The lamp burns low and red when the battery is nearly flat.
@@ -46,9 +45,8 @@ The lamp burns low and red when the battery is nearly flat.
 
 Move the mouse over the exposed wallpaper and click what is there. The clock
 and windows catch a little light; birds leave their perch. On the coast the
-water ripples, on the moon a little dust lifts from the ground, and in the vale
-the tree and stones release small lights. In the street, the cat on your sill
-turns an ear and the wet road answers with ripples. Reactions fade back into
+water ripples, and on the moon a little dust lifts from the ground. In the street,
+the cat on your sill turns an ear and the wet road answers with ripples. Reactions fade back into
 the ordinary scene; they do not change the real time, weather or machine signals.
 
 The wallpaper takes mouse input only where it is exposed. Application windows
@@ -127,7 +125,7 @@ explicit command-line flags such as `--weather` or `--at`.
 
 ## What the sky is telling you
 
-This is the sky of `rooftops`, `street`, `city`, `coast` and `vale`. The moon has none of
+This is the sky of `rooftops`, `street`, `city` and `coast`. The moon has none of
 it: see its own rows further down.
 
 | You see | It means |
@@ -175,12 +173,6 @@ And in each view, a few things of its own:
 | | The lander | It comes down on the hour and leaves at half past. |
 | | The rover and two figures out on the plain | Working hours on a working day. |
 | | Someone sitting on the rock in front | Off duty: evenings in the week, most of the weekend. |
-| vale | The small ringed moon | The week. It rises on the left on Monday morning and sets on the right on Sunday night. |
-| | The waterfall | The weather: in spate when it rains, a trickle in a dry heat, a column of ice in a hard frost. |
-| | The great tree | The season: blossom, leaf, colour, bare branches. Three of its lanterns are lit on any night, all of them on Friday and Saturday. |
-| | Snow on the peaks | It comes further down the colder it is. |
-| | A ship in the air | It set off on the hour, and takes nine minutes to cross. |
-| | Lights in the hamlet and the tower | Village hours. On the hour the birds on the tower take off. |
 
 `dormer explain` says the same in words.
 
@@ -281,8 +273,7 @@ pick it up from there. `coast.rs` is the one to read for land drawn by hand;
 `downtown.rs` for buildings.
 
 A view under our own sky gets the sun, moon, stars, clouds and weather painted
-for it, and may add something of its own behind the clouds in `heavens` (the
-little moon in `vale.rs`). A view that returns `Sky::Void` from `sky` gets
+for it, and may add something of its own behind the clouds in `heavens`. A view that returns `Sky::Void` from `sky` gets
 nothing overhead and no weather, birds or planes: it paints the whole sky
 itself (`moonbase.rs`), with the painter's star field and Milky Way there to
 call. Whatever a view paints in `indoors` is nearer than the weather: the
@@ -301,6 +292,6 @@ Rain on its own half-resolution surface (to cut its cost), car lights in the
 streets, trees swaying, an owl and bats at dusk, the ISS on its real passes,
 puddle sheen on wet roofs, crepuscular rays, configurable holidays, a view
 that changes with the day of the week, waves breaking on the rocks in a gale,
-real cloud on the whole earth, a dragon for the vale.
+real cloud on the whole earth.
 
 `prototype/` holds the original Python version this was rewritten from.

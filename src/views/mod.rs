@@ -27,7 +27,6 @@ pub mod kit;
 pub mod moonbase;
 pub mod rooftops;
 pub mod street;
-pub mod vale;
 
 use crate::color::Rgb;
 use crate::gfx::{Bloom, Canvas, Depth, Draw, Frame};
@@ -203,10 +202,40 @@ pub trait View: Sync {
     fn words(&self, sc: &Scene) -> Vec<(&'static str, String)>;
 }
 
-pub static ALL: [&dyn View; 6] = [&rooftops::Rooftops, &street::Street, &downtown::Downtown, &coast::Coast, &moonbase::Moonbase, &vale::Vale];
+pub static ALL: [&dyn View; 5] = [&rooftops::Rooftops, &street::Street, &downtown::Downtown, &coast::Coast, &moonbase::Moonbase];
+
+/// Views that existed once and what a saved choice of one falls back to.
+pub const RETIRED: [(&str, &str); 1] = [("vale", "rooftops")];
 
 pub fn find(id: &str) -> Option<&'static dyn View> {
     ALL.iter().copied().find(|v| v.id() == id)
+}
+
+/// What a view name from a file or a flag means today.
+pub enum Lookup {
+    Found(&'static dyn View),
+    /// a view that was removed: the one to show in its place
+    Retired(&'static dyn View),
+    Unknown,
+}
+
+pub fn lookup(id: &str) -> Lookup {
+    if let Some(v) = find(id) {
+        return Lookup::Found(v);
+    }
+    match RETIRED.iter().find(|r| r.0 == id).and_then(|r| find(r.1)) {
+        Some(v) => Lookup::Retired(v),
+        None => Lookup::Unknown,
+    }
+}
+
+/// The error for a view name given on the command line.
+pub fn refusal(id: &str) -> String {
+    if RETIRED.iter().any(|r| r.0 == id) {
+        format!("the view '{}' has been retired; choose one of: {}", id, names())
+    } else {
+        format!("there is no view '{}'; choose one of: {}", id, names())
+    }
 }
 
 pub fn names() -> String {

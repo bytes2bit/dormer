@@ -48,12 +48,54 @@ pub fn state() -> PathBuf {
 }
 
 /// The view to look out on: what `dormer view` last chose, else the config's, else the rooftops.
+/// A choice that names a retired or unknown view is not obeyed: the rooftops show instead, and
+/// the first time that happens in a process, one line says so. Nothing on disk is changed.
 pub fn view() -> &'static dyn crate::views::View {
-    fs::read_to_string(state().join("view"))
-        .ok()
-        .and_then(|id| crate::views::find(id.trim()))
-        .or_else(|| crate::views::find(&crate::settings::runtime().view))
-        .unwrap_or(crate::views::ALL[0])
+    let (view, why) = view_choice();
+    if let Some(why) = why {
+        say_once(&why);
+    }
+    view
+}
+
+/// The view in force, and the reason when a saved choice could not be followed.
+pub fn view_choice() -> (&'static dyn crate::views::View, Option<String>) {
+    let persisted = fs::read_to_string(state().join("view")).ok();
+    choose_view(persisted.as_deref(), &crate::settings::runtime().view)
+}
+
+/// A persisted `dormer view` choice outranks the configured one. A name that is retired or
+/// unknown is not obeyed and nothing is rewritten: the rooftops show, with the reason.
+pub fn choose_view(persisted: Option<&str>, configured: &str) -> (&'static dyn crate::views::View, Option<String>) {
+    use crate::views::{self, Lookup};
+    let fallback = views::ALL[0];
+    let persisted = persisted.map(str::trim).filter(|t| !t.is_empty());
+    let (source, id) = match persisted {
+        Some(id) => ("chosen with `dormer view`", id),
+        None => ("set in the config", configured),
+    };
+    match views::lookup(id) {
+        Lookup::Found(v) => (v, None),
+        Lookup::Retired(v) => {
+            let why = format!("the view '{}' ({}) has been retired; showing {} instead. Saving settings from `dormer dev` replaces it.", id, source, v.id());
+            (v, Some(why))
+        }
+        Lookup::Unknown => {
+            let why = format!("there is no view '{}' ({}); showing {} instead. Choose one of: {}", id, source, fallback.id(), views::names());
+            (fallback, Some(why))
+        }
+    }
+}
+
+/// Say a diagnostic once per process, on stderr.
+pub fn say_once(text: &str) {
+    static SAID: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    if let Ok(mut said) = SAID.lock() {
+        if !said.iter().any(|s| s == text) {
+            said.push(text.to_string());
+            eprintln!("dormer: {}", text);
+        }
+    }
 }
 
 pub fn runtime() -> PathBuf {
@@ -571,5 +613,51 @@ pub fn set_wallpaper(path: &str) -> Result<(), String> {
         None => Err(format!("{} did not answer", kind)),
         Some((false, out, err)) => Err(format!("{} refused the picture: {}", kind, if err.trim().is_empty() { out.trim() } else { err.trim() })),
         Some(_) => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::choose_view;
+    use crate::views;
+
+    #[test]
+    fn five_views_and_no_vale() {
+        assert_eq!(views::ALL.len(), 5);
+        assert!(views::find("vale").is_none());
+        assert!(views::find("moon").is_some());
+        assert_eq!(views::names(), "rooftops | street | city | coast | moon");
+        let all: Vec<&str> = views::ALL.iter().map(|v| v.id()).collect();
+        assert_eq!(all, ["rooftops", "street", "city", "coast", "moon"]);
+    }
+
+    #[test]
+    fn a_saved_vale_falls_back_to_rooftops_with_a_reason() {
+        // from the persisted `dormer view` file
+        let (v, why) = choose_view(Some("vale\n"), "coast");
+        assert_eq!(v.id(), "rooftops");
+        let why = why.expect("a diagnostic");
+        assert!(why.contains("'vale'") && why.contains("retired") && why.contains("dormer view"), "{}", why);
+        // from the config, when nothing was persisted
+        let (v, why) = choose_view(None, "vale");
+        assert_eq!(v.id(), "rooftops");
+        assert!(why.unwrap().contains("set in the config"));
+        // a persisted valid choice outranks a retired configured one, and says nothing
+        let (v, why) = choose_view(Some("street"), "vale");
+        assert_eq!((v.id(), why), ("street", None));
+        // an empty file is no choice at all
+        assert_eq!(choose_view(Some("  \n"), "city").0.id(), "city");
+        // a typo is told the valid names
+        let (v, why) = choose_view(None, "citty");
+        assert_eq!(v.id(), "rooftops");
+        assert!(why.unwrap().contains("rooftops | street | city | coast | moon"));
+    }
+
+    #[test]
+    fn asking_for_vale_by_name_lists_the_valid_views() {
+        let e = views::refusal("vale");
+        assert!(e.contains("retired") && e.contains("rooftops | street | city | coast | moon"), "{}", e);
+        let e = views::refusal("nowhere");
+        assert!(e.contains("no view 'nowhere'") && !e.contains("retired"), "{}", e);
     }
 }

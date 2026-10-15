@@ -14,6 +14,7 @@ mod scene;
 mod settings;
 mod sky;
 mod sources;
+mod story;
 mod tm;
 mod town;
 mod views;
@@ -41,7 +42,7 @@ const USAGE: &str = "dormer — a window in the roof: the same rooftops under th
     dormer tour                 play the whole of today in about a minute
     dormer pretend snow         borrow some weather for ten minutes
     dormer live                 run the living wallpaper (birds, rain, shooting stars)
-    dormer view moon            look out somewhere else: rooftops | street | city | coast | moon | vale
+    dormer view moon            look out somewhere else: rooftops | street | city | coast | moon
     dormer dev                  open the slider panel and bend the scene by hand
     dormer install              start on login, keep the still wallpaper up to date
     dormer doctor               show what dormer found on this machine
@@ -283,7 +284,7 @@ fn moment(args: &Args) -> Result<Moment, String> {
         m.bent = true;
     }
     if let Some(id) = args.get("view") {
-        m.view = views::find(id).ok_or(format!("--view is one of: {}", views::names()))?;
+        m.view = views::find(id).ok_or_else(|| format!("--view: {}", views::refusal(id)))?;
     }
     if let Some(kind) = args.get("weather") {
         m.wx = preset(kind, &m.wx).ok_or(format!("--weather is one of: {}", PRESETS.map(|p| p.0).join(" ")))?;
@@ -460,7 +461,7 @@ fn cmd_sheet(args: &Args) -> Result<i32, String> {
         let mut m = real_moment(Some("dark"), false);
         (m.wx, _) = sources::read_weather(false);
         if let Some(id) = args.get("view") {
-            m.view = views::find(id).ok_or(format!("--view is one of: {}", views::names()))?;
+            m.view = views::find(id).ok_or_else(|| format!("--view: {}", views::refusal(id)))?;
         }
         m.ts = tm::parse(when).ok_or(format!("cannot read the time '{}'", when))?;
         if let Some(v) = args.num::<u32>("agents")? {
@@ -610,7 +611,7 @@ fn cmd_view(args: &Args) -> Result<i32, String> {
     } else if views::find(id).is_some() {
         sources::write_atomic(&path, id);
     } else {
-        return Err(format!("usage: dormer view {} | default", views::names()));
+        return Err(format!("{} (or `default`)", views::refusal(id)));
     }
     if sources::live_pid() == 0 {
         let forced = Args { flags: HashMap::from([("force".to_string(), "1".to_string())]), pos: Vec::new() };
@@ -750,7 +751,10 @@ fn cmd_doctor() -> Result<i32, String> {
             None => "no rain in the next few hours".to_string(),
         }),
         ("mode", sources::theme_mode()),
-        ("view", format!("{}  ({})", sources::view().id(), sources::view().about())),
+        ("view", match sources::view_choice() {
+            (v, None) => format!("{}  ({})", v.id(), v.about()),
+            (v, Some(why)) => format!("{}  ({}); {}", v.id(), v.about(), why),
+        }),
         ("size", format!("{}x{}", w, h)),
         ("wallpaper", sources::backend()),
         ("living layer", if live != 0 { format!("running (pid {})", live) } else { "not running".to_string() }),

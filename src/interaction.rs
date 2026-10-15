@@ -408,7 +408,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn perch_hover_draws_attention_and_runes_follow_stone_geometry() {
+    fn perch_hover_draws_attention() {
         let view = crate::views::find("rooftops").unwrap();
         let sc = scene(view, false);
         let lay = Layout::new(640, 400, view.horizon());
@@ -422,12 +422,5 @@ pub(crate) mod tests {
         let mut f = Frame { w: 640, h: 400, px: &mut px, dirty: &mut dirty, depth: None, behind: None, full_damage: false };
         i.draw(&mut Draw::new(&mut f, &mut shaper), &sc, &lay);
         assert!(px.iter().any(|p| *p != 0xFF80_8080), "perch hover must be visible");
-        let vale = crate::views::find("vale").unwrap();
-        let cache = crate::paint::Cache::new(vale, 12, 640, 400);
-        let mut sc = scene(vale, false);
-        sc.temp = -5.0;
-        let ts = cache.stage.targets(&sc, &crate::views::Anchors::default());
-        assert_eq!(ts.iter().filter(|t| t.action == Action::Sparks && t.at.0 < 500.0).count(), 8);
-        assert!(!ts.iter().any(|t| t.action == Action::Ripple));
     }
 }
