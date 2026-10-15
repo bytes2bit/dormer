@@ -926,13 +926,39 @@ fn cmd_soak(args: &Args) -> Result<i32, String> {
         if let Some(b) = src.perch {
             world.scatter(b);
         }
+        // the living scene of this view, driven by random stories and random hands
+        let mut story = cache.stage.story().and_then(|d| story::StoryWorld::new(d, k as u64).ok());
+        let stories: Vec<story::StoryId> = story.as_ref().map(|w| w.definition().stories.iter().map(|d| d.id).collect()).unwrap_or_default();
+        let objects: Vec<story::model::ObjectDef> = story.as_ref().map(|w| w.definition().objects.clone()).unwrap_or_default();
         for step in 0..60 {
-            world.step(r.range(0.01, 0.12), &sc, &src, m.ts + step as f64 * 61.0);
+            let dt = r.range(0.01, 0.12);
+            world.step(dt, &sc, &src, m.ts + step as f64 * 61.0);
+            if let Some(w) = story.as_mut() {
+                if r.chance(0.12) && !stories.is_empty() {
+                    w.trigger(stories[r.below(stories.len())]);
+                }
+                if r.chance(0.2) && !objects.is_empty() {
+                    // a hand: press on an object, drag it about, let go (sometimes a throw)
+                    let o = &objects[r.below(objects.len())];
+                    let at = (o.at.0 + r.range(-8.0, 8.0), o.at.1 + r.range(-8.0, 8.0));
+                    w.gesture(story::Gesture::Press(at));
+                    for _ in 0..r.below(4) {
+                        w.gesture(story::Gesture::Drag((at.0 + r.range(-90.0, 90.0), at.1 + r.range(-60.0, 60.0))));
+                    }
+                    w.gesture(story::Gesture::Release { at, velocity: (r.range(-400.0, 400.0), r.range(-300.0, 300.0)) });
+                }
+                w.advance(dt as f64 * 4.0, &sc);
+                assert!(w.actors().count() <= 24 && w.physics().bodies.len() <= 128, "the scene grew beyond its limits");
+            }
             if step % 20 == 19 {
+                if let Some(w) = story.as_ref() {
+                    // the base under whatever has happened, and the moving things over it
+                    let _ = paint::render_state(&mut sc, cache, &w.snapshot());
+                }
                 let mut dirty = Vec::new();
                 let mut frame = gfx::Frame { w: cache.w, h: cache.h, px: &mut px, dirty: &mut dirty, depth: Some(cache.stage.depth()), behind: None, full_damage: false };
                 let mut d = gfx::Draw::new(&mut frame, &mut shaper);
-                world.draw(&mut d, &sc, cache, &anchors, m.ts + step as f64, None);
+                world.draw(&mut d, &sc, cache, &anchors, m.ts + step as f64, story.as_ref());
                 cache.stage.lively(&sc, m.ts + step as f64 * 61.0);
                 live::coalesce(dirty, cache.w as i32, cache.h as i32);
             }

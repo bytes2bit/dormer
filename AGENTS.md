@@ -7,6 +7,8 @@ a familiar place under the real sky, informed by local time, weather, the week,
 and activity on the user's machine. It produces both PNG stills for a wallpaper
 daemon and an animated background layer for each monitor. Live mode accepts
 mouse input by default; `[live] interactive = false` restores click-through.
+Four views (rooftops, street, city, coast) are inhabited by a living scene: objects
+with state that gestures change, and people, animals and vehicles who respond.
 
 The active implementation is the Rust 2021 binary in `src/`, versioned through
 `Cargo.toml`. It uses a custom CPU renderer and direct Wayland client protocols;
@@ -45,7 +47,9 @@ with the README and `dormer explain`.
 | `src/views/kit.rs` | Shared building tables, skyline masks, window schedules, painting and terrain helpers. |
 | `src/views/globe.rs` | Hand-drawn Earth geography and globe rendering for the moon view; flat chart export. |
 | `src/live.rs` | `World` simulation, particles and anchor effects, moving drawing, damage coalescing. |
-| `src/interaction.rs` | Per-monitor hit testing, settled hover feedback and fixed-capacity finite reactions; preview coordinates. |
+| `src/interaction.rs` | Pointer coordinates (logical surface to design units), preview-point parsing and the release velocity of a throw. |
+| `src/story/` | The living scene, no pixels or Wayland: `model` (objects, state, limits, validation), `events` (bounded bus, sim clock), `physics` (gestures, bodies, basins, springs), `actors` (routes, reservations, walking), `director` (sequences, escalation, cleanup), `behaviors` (perch, occupant, animal, `repair`/`visit`/`meeting`/`round` templates), `draw` (people, animals, vehicles, props), `replay` (replay files, headless `Session`), `mod` (`StoryWorld`). |
+| `src/views/episodes/` | Each developed view's scene as data: `rooftops`, `street`, `city`, `coast` define objects, routes, surfaces, stories and behaviors from the view's own geometry. |
 | `src/pointer.rs` | Seat/pointer focus and cursor resources, including the software cursor fallback. |
 | `src/buffer.rs` | Pixel-exact stale/damage restoration and visibility/resume decisions. |
 | `src/wl.rs` | Per-monitor Wayland surfaces, shared-memory double buffers, scaling, crossfades, visibility/power pacing, signals and file watches; headless `one_frame`. |
@@ -59,7 +63,7 @@ The registered view IDs are `rooftops` (`rooftops.rs`), `street` (`street.rs`),
 `city` (`downtown.rs`), `coast` (`coast.rs`) and `moon` (`moonbase.rs`). The
 former `vale` view is retired: `views::RETIRED` maps a saved `vale` choice to
 `rooftops` with a diagnostic, and `--view vale` is refused. CLI IDs do not always match filenames. All use `Sky::Home` except
-`moon`, which uses `Sky::Void` and paints its own heavens.
+`moon`, which uses `Sky::Void` and paints its own heavens and has no living scene.
 
 ## Rendering and extension contracts
 
@@ -84,9 +88,14 @@ and masks for a screen size, determines window lights, and paints:
 - `indoors` / `indoors_alive`: objects on the viewer's side of the glass,
   drawn after weather. The live hook's `falling` flag tells it to restore
   foreground objects that rain or snow has just overpainted.
-- `targets`: interactive objects/regions, ordered far to near in design
-  coordinates. Use existing geometry, transformed layouts and presence/weather
-  conditions. Targets carry an action, color and optional occlusion layer.
+- the living scene, all optional: `story` (the `Definition`: objects, routes,
+  surfaces, stories, behaviors), `ground_state` / `indoors_state` (the same
+  painting as `ground` / `indoors`, but reading a `Snapshot` of object state:
+  whatever is missing, displaced or moving is left out of the base),
+  `lights_state`, `story_depth`, `story_alive` (objects that are moving or
+  carried), `story_actor` (draw one of the scene's actors in the view's own
+  style) and `story_tone` (the light people stand in). `ground` simply calls
+  `ground_state` with `Snapshot::intact()`, so a view with no scene is unchanged.
 
 The still pass paints shared sky/stars/sun/moon, `heavens`, clouds, still sky
 visitors, `ground`, still weather, `indoors`, then bloom. `Sky::Void` bypasses
@@ -97,6 +106,15 @@ Use `Anchors` for reusable effects (smoke, lamp breathing, TV flicker, beacons,
 twinkling bulbs, music, perches and fireflies) rather than duplicating their
 simulation in each view. Anchor positions are screen coordinates; the live
 simulation converts relevant positions to design coordinates.
+
+The living scene reaches the picture only through state. A gesture or story
+changes an object; `StoryWorld` reports the design-space rectangles whose base
+picture changed; the live layer repaints just those from `ground_state` and
+draws moving things over them. Never repaint the whole base per frame, never
+bake a moving object into the base, and keep each object's `bounds` large
+enough for every form it can take (that rectangle is what is repainted).
+`docs/engine.md` is the guide, with a compiled example in
+`src/story/example.rs`.
 
 To add a view, implement `View` and `Stage` in `src/views/`, declare the module,
 and register it in `ALL` (including its array length). Registry-based discovery
@@ -163,8 +181,11 @@ Pointer events are native Wayland seat events on exposed wallpaper surfaces;
 there is no global mouse polling or keyboard capture. `Screen` owns its
 interaction state. Convert logical pointer coordinates through the actual
 logical/buffer dimensions and `Layout.back`; do not assume integer scale.
-Click reactions are limited to eight/96 particles per screen and a 120 ms
-cooldown. Hover settles; paused/covered/sleeping outputs ignore new input.
+Gestures reach the scene as press/drag/release with a measured velocity; at
+most 16 are queued per screen between ticks, and the scene is bounded (four
+incidents, 24 actors, 128 bodies, 64 objects, 256 events, 256 instructions a
+tick, three escalations then a protected cleanup). Paused, covered or sleeping
+outputs ignore new input and do not step their scene: no catch-up on resume.
 Maintain immediate stale-output rebuild on wake independently of the global
 scene age, and preserve crossfades for visible view changes.
 
@@ -217,6 +238,13 @@ Rust integration-test suite, or repository-specific rustfmt configuration.
 The optional `python3 tests/dev_panel.py` check drives a real PTY using isolated
 offline state and a harmless `true` wallpaper command. It covers fragmented
 input, dragging, first adjustment, preview, reset, idle wakeups and cleanup.
+
+`cargo test` includes `story::acceptance`: every incident of every view run
+repeatedly, by day and night, in rain and snow, at several proportions and under
+interference, asserting the world returns to exactly what the view authored.
+`cargo test --release -- --ignored scene_costs --nocapture` prints the scene's
+per-frame cost. `soak` also drives random stories and gestures through every
+developed view's scene and asserts its limits.
 
 Unit tests cover Python RNG parity, the seed-12 town fingerprint, household
 schedules, Tangier astronomy, sky-projection round trips and damage merging.
@@ -277,13 +305,11 @@ covered**, so it changes the behavior being measured.
 ## Working-tree context
 
 Always inspect `git status` and the existing diff before editing; preserve
-unrelated work. At this guide's initial review on 2026-10-14, the checkout
-already contained uncommitted `street` view/indoor-layering additions and
-Wayland visibility/sleep changes, plus README/config/reference-image updates.
-This guide describes that working tree, not just the last commit. Recheck the
-current state rather than assuming those changes remain uncommitted.
+unrelated work.
 
-Initial verification: all six unit tests and the release build passed; a
-six-view still sheet and a rainy street live-frame export were rendered and
-visually inspected. Interactive Wayland/systemd integration was not exercised.
-Treat this as a dated baseline and run appropriate checks for each new task.
+Verification notes for the living-scene work are in
+`docs/living-scenes-verification.md`, including which checks could not be run
+without a native Wayland session. Interactive Wayland/systemd integration (real
+pointer events, scaling, occlusion, suspend) was not exercised by automated
+checks; treat any change touching `wl.rs`, `pointer.rs` or `buffer.rs` as
+needing a real session.

@@ -100,3 +100,54 @@ fn an_incident_that_is_pestered_ends_in_a_protected_cleanup_that_leaves_nothing(
         }
     }
 }
+
+/// Costs, for the verification notes: `cargo test --release --offline -- --ignored scene_costs --nocapture`.
+#[test]
+#[ignore]
+fn scene_costs() {
+    use super::physics::Gesture;
+    use std::time::Instant;
+    for view in ALL.iter().map(|v| v.id()).filter(|v| *v != "moon") {
+        let mut s = test_session(view, "2026-10-13 15:30", "clear", (1920, 1200));
+        let incidents: Vec<super::StoryId> = s.story.definition().stories.iter().filter(|d| d.class == Class::Incident).map(|d| d.id).collect();
+        let objects = s.story.definition().objects.clone();
+        run(&mut s, 5.0);
+        // idle: nothing is happening
+        let t = Instant::now();
+        let n = 2000;
+        for _ in 0..n {
+            s.advance(1.0 / 30.0, 1.0 / 30.0);
+        }
+        let idle = t.elapsed().as_secs_f64() / n as f64 * 1e6;
+        // active: one incident running at a time, repeatedly
+        let t = Instant::now();
+        let mut frames = 0;
+        for id in incidents.iter().cycle().take(incidents.len() * 3) {
+            s.story.trigger(*id);
+            for _ in 0..900 {
+                s.advance(1.0 / 30.0, 1.0 / 30.0);
+                frames += 1;
+            }
+        }
+        let active = t.elapsed().as_secs_f64() / frames as f64 * 1e6;
+        // flood: every frame a trigger of every incident and a full gesture on a random object
+        let t = Instant::now();
+        let mut worst: f64 = 0.0;
+        let frames = 1500;
+        for k in 0..frames {
+            let f = Instant::now();
+            for id in &incidents {
+                s.story.trigger(*id);
+            }
+            let o = &objects[k % objects.len()];
+            s.gesture(Gesture::Press(o.at));
+            s.gesture(Gesture::Drag((o.at.0 + 30.0, o.at.1 + 20.0)));
+            s.gesture(Gesture::Release { at: (o.at.0 + 30.0, o.at.1 + 20.0), velocity: (300.0, -200.0) });
+            s.advance(1.0 / 30.0, 1.0 / 30.0);
+            worst = worst.max(f.elapsed().as_secs_f64() * 1e6);
+        }
+        let flood = t.elapsed().as_secs_f64() / frames as f64 * 1e6;
+        assert!(s.story.actors().count() <= 24 && s.story.physics().bodies.len() <= 128);
+        println!("{:8} idle {:7.1} us/frame   active {:7.1} us/frame   flood {:7.1} us/frame (worst {:8.1} us)", view, idle, active, flood, worst);
+    }
+}

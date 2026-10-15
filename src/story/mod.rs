@@ -585,3 +585,5 @@ mod tests;
 mod render_tests;
 #[cfg(test)]
 mod acceptance;
+#[cfg(test)]
+mod example;

@@ -40,7 +40,15 @@ struct Ctx<'a> {
 
 /// Draw one frame. Also fills in `sc.lit_share`.
 pub fn render(sc: &mut Scene, cache: &Cache) -> (Canvas, Anchors) {
-    render_state(sc, cache, &crate::story::Snapshot::intact())
+    // nothing has happened: the objects stand as the view authored them (a ladder that is
+    // only brought out by a story is not there)
+    match cache.stage.story() {
+        Some(def) => {
+            let store = crate::story::ObjectStore::new(&def.objects);
+            render_state(sc, cache, &crate::story::Snapshot::new(&store))
+        }
+        None => render_state(sc, cache, &crate::story::Snapshot::intact()),
+    }
 }
 
 /// Draw one frame with the objects of the living scene in the state `state` has them in.

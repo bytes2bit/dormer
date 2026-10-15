@@ -8,13 +8,13 @@ at this moment, and keeps it alive on your desktop: the sun and moon where they
 really are, tonight's real stars and planets, the weather outside, the rhythm
 of the week, and a few signals from your own machine.
 
-![The six views](docs/views.jpg)
+![The five views, at sunrise, sunset and night](docs/views.jpg)
 
-## Six views
+## Five views
 
-Four of them are places under your own sky, one is a valley in another world
-under that same sky, and one is on the moon, where the sky is the earth's to
-fill:
+Four of them are places under your own sky, and one is on the moon, where the
+sky is the earth's to fill. The four places are inhabited: things happen in
+them, and you can touch them.
 
 | | |
 | --- | --- |
@@ -43,31 +43,55 @@ The lamp burns low and red when the battery is nearly flat.
 
 ## Touching the view
 
-Move the mouse over the exposed wallpaper and click what is there. The clock
-and windows catch a little light; birds leave their perch. On the coast the
-water ripples, and on the moon a little dust lifts from the ground. In the street,
-the cat on your sill turns an ear and the wet road answers with ripples. Reactions fade back into
-the ordinary scene; they do not change the real time, weather or machine signals.
+The wallpaper is a place with things in it, and the things answer. Move the
+mouse over the exposed wallpaper and use it like a hand: **click** something to
+poke it, **press and drag** to pull it, let go **while moving** to throw it. A
+window will take a **knock**, snow can be **brushed** off, a loose thing can be
+**moved** somewhere else. What happens next is not an effect: an object changes
+state (a sheet comes off its line, a hydrant opens, a signal fails, a boat comes
+off its mooring), and the people nearby have something to do about it.
+
+| | the things you can reach | what happens |
+| --- | --- | --- |
+| `rooftops` | the sheet on the line, the chimney cap, the water tank, windows, the cat | the owner leans out; a roofer comes with a ladder; a plumber puts a bucket under the leak; neighbours stop to talk |
+| `street` | the hydrant, the diner's sign, a stack of parcels, windows | the road is closed with cones and a truck comes; a crew goes up a ladder to the sign; a courier gathers the parcels, even one thrown in the road; cars queue behind it |
+| `city` | the station signal, the crane's load, a junction box, windows | the train stops short and passengers gather while technicians test the signal; work stops and a crew frees the load or lifts a fallen plate; a block of windows goes dark until it is traced |
+| `coast` | the moored boat and its line, the lantern, the crate on the jetty | the boat drifts and is fetched, by the work boat or hauled in on the line you moved; the keeper climbs the tower to mend the lantern (and fetches a part dropped in the wind); a crate in the water is recovered, with gulls watching |
+
+Each place also has its ordinary life, unprompted: a visit, two people who stop
+to talk, someone making their round, birds on their perch, the cat. All of it
+follows the real sky: nobody comes out into rain they would not walk in, and
+a wind that blows a sheet off the line is the wind that is blowing.
+
+If you leave something half-done, it is finished without you; if you keep
+interfering, the people get help, and after three escalations the job is
+wrapped up and put away so the picture is never left broken. Everything is
+bounded (at most four incidents, 24 people and animals, 128 loose things at
+once) and a hidden, covered or held wallpaper does not carry on behind your
+back: it comes back at the present moment, not after a catch-up.
 
 The wallpaper takes mouse input only where it is exposed. Application windows
 keep their input, and dormer never takes keyboard focus. If your desktop has
 icons beneath the wallpaper, set `interactive = false` under `[live]` to pass
-clicks through to them. Restart `dormer live` after changing that setting.
+clicks through to them. To switch the incidents and daily life off, set
+`stories = false` under `[activity]`; the picture is then exactly as it was
+before. `dormer scenes list` says what can happen in each view, and the
+settings panel's Scenes page starts, pauses, steps or resets any of it.
 
-Reactions stay on the monitor you touched. They have fixed limits and short
-lifetimes; moving the mouse does not rebuild the still picture. A stationary
-hover settles, and hidden, sleeping or held wallpapers accept no new reactions.
-
-To try a reaction without changing your desktop, use a headless export:
+To watch a scene without touching your desktop, write the inputs in a file and
+replay them to PNGs:
 
 ```sh
-dormer live --frame ripple.png --view coast --at '2026-10-13 21:00' \
-  --weather clear --mode dark --seconds 0.7 --pointer 1170,790 --click 1170,790
+cat > hydrant.json <<'EOF'
+{"view":"street","seed":12,"seconds":60,"size":"1600x1000",
+ "at":"2026-10-13 18:20","weather":"clear",
+ "inputs":[{"t":1,"trigger":"hydrant"}],"frames":[0.5,4,10,24,48]}
+EOF
+dormer replay hydrant.json --out hydrant/    # frame-*.png and a trace.json
 ```
 
-Coordinates use the 1600x1000 design space. `--seconds` sets how far the
-simulation runs after the click. PNG exports still read your config and weather
-sources; see `AGENTS.md` for an isolated, offline preview setup.
+Coordinates are in the 1600x1000 design space; gestures are `press`, `drag`,
+`release` (with `vx`, `vy`) and `cancel`.
 
 ## Settings panel
 
@@ -206,6 +230,8 @@ not running. `dormer install --no-live` keeps only the still frames.
 | `dormer explain` | Describe the scene in words. Takes `--at`, `--weather` and `--view`. |
 | `dormer tour` | Play today from midnight to midnight, smoothly, in about a minute. |
 | `dormer pretend snow` | Borrow some weather for ten minutes. |
+| `dormer scenes list` | What can happen in each view, and what sets it off. |
+| `dormer replay file.json --out dir/` | Play timed gestures and triggers headlessly; write frames and a trace. |
 | `dormer draw --out a.png --at "2026-12-31 23:50"` | Draw another moment to a file. |
 | `dormer sheet out.png "2026-10-13 07:10,city" "2026-10-13 21:00,storm,coast"` | Several moments on one sheet. |
 | `dormer hold on` / `off` | Freeze or release the living wallpaper (for a lock screen's hooks). |
@@ -222,6 +248,8 @@ Measured on a 1920x1200 laptop screen (Core Ultra 5):
 | Living wallpaper, a calm scene in view | 0.6 to 1.5% of one core |
 | The `street` view in view, with its traffic always about | about 3% of one core |
 | Rain or snow in view | about 7% of one core: the whole screen changes every frame |
+| A quiet scene (no incident) | nothing beyond the above: the scene sleeps until its next job falls due |
+| One incident running | the simulation takes about 0.05 to 0.09 ms a frame; the picture repaints only the rectangles it changed |
 | Wallpaper covered by a tiled or fullscreen window, or by floating ones that fill the screen | nothing |
 | Screen off or asleep, but not locked | nothing |
 | Memory | about 35 MB |
@@ -257,6 +285,10 @@ implemented from their documentation and have not been tested.
 - `live.rs` simulates what is in the air, and animates whatever a view points
   at while painting: a chimney here, a television behind that window, a
   beacon there. `wl.rs` puts it on a layer surface.
+- `story/` is the living scene: objects with state, a bounded event bus, a
+  little physics, people who follow routes, and sequences that say what
+  happens. A view only describes what is in it (`views/episodes/`); see
+  [`docs/engine.md`](docs/engine.md).
 - `settings/` is the saved configuration as a typed snapshot (fixed or auto
   inputs, activity rates, per-view knobs) and its comment-preserving writer;
   `dev.rs` and `dev/` are the panel. `dormer soak` draws thousands of random moments in
@@ -269,7 +301,9 @@ Write a module in `src/views/` with a type that implements `View` (its name,
 its horizon, its knobs for the dev panel, its words for `dormer explain`) and
 a `Stage` (lay out, paint the ground, draw what moves), and add it to `ALL` in
 `views/mod.rs`. The command line, the config, the dev panel and the soak test
-pick it up from there. `coast.rs` is the one to read for land drawn by hand;
+pick it up from there. To make it inhabited, give it a `story()` and the
+state-aware drawing hooks; [`docs/engine.md`](docs/engine.md) walks through it
+with a complete example. `coast.rs` is the one to read for land drawn by hand;
 `downtown.rs` for buildings.
 
 A view under our own sky gets the sun, moon, stars, clouds and weather painted
