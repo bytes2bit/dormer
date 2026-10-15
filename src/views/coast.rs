@@ -20,7 +20,11 @@ use crate::props::{self, Layout};
 use crate::rng::hash2;
 use crate::scene::Scene;
 use crate::views::kit::{curve, grass, height_at, to_px};
+use crate::story::draw::Tone;
+use crate::story::{Damage, Snapshot};
+use crate::views::episodes::coast::{self as episode, CoastBindings};
 use crate::views::{lamp_colours, yours, Anchors, Blink, Breath, Knob, Lights, Smoke, Stage, View, Yours};
+use std::cell::Cell;
 
 pub struct Coast;
 
@@ -103,6 +107,17 @@ struct Shore {
     foot: Vec<P>,
     dune: Vec<P>,
     bluff: Vec<P>,
+    /// what the living scene works with
+    bind: CoastBindings,
+    /// the lantern is not turning (a fault, or a test of the sweep), as of the last frame
+    lantern: Cell<u8>,
+    /// boats that have gone from their moorings, as of the last frame: bit 0 the first, bit 1 the second
+    gone: Cell<u8>,
+}
+
+/// Where the living scene's objects stand, in the numbers of this view.
+fn bindings() -> CoastBindings {
+    CoastBindings { land: LAND, light: (LIGHT_X, LIGHT_FOOT, LAMP_Y), jetty: JETTY, door: (213.0, 518.0), boats: BOATS, crate_at: (640.0, 793.5) }
 }
 
 /// The outline of the lighthouse and the cottage, so that birds pass behind them.
@@ -172,7 +187,7 @@ impl Shore {
             sh.poly(&p);
         });
         let depth = Depth::stack(&masks, w, h);
-        Shore { lay, land, masks, depth, far, top, foot, dune, bluff }
+        Shore { lay, land, masks, depth, far, top, foot, dune, bluff, bind: bindings(), lantern: Cell::new(0), gone: Cell::new(0) }
     }
 }
 
@@ -438,6 +453,86 @@ impl Stage for Shore {
     }
 
     fn ground(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors) {
+        self.ground_state(d, sc, lights, bloom, out, &Snapshot::intact())
+    }
+
+    fn story(&self) -> Option<crate::story::Definition> {
+        Some(episode::define(&self.bind))
+    }
+
+    fn story_tone(&self, sc: &Scene, layer: Option<u8>) -> Tone {
+        let near = match layer {
+            Some(l) if l <= 2 => shade(mix(sc.layers[3], sc.layers[2], 0.42), -0.25),
+            Some(3) => sc.layers[3],
+            _ => sc.layers[4],
+        };
+        Tone::new(near, 0.22 + 0.66 * sc.day, sc.sky[5])
+    }
+
+    fn story_actor(&self, d: &mut Draw<Frame>, sc: &Scene, a: &crate::story::actors::Actor, t: f32) -> bool {
+        use crate::story::actors::{ActorState, Kind, Role};
+        if a.kind != Kind::Boat {
+            return false;
+        }
+        let u = self.lay.u;
+        let moving = matches!(a.state, ActorState::Moving);
+        let bob = ((t * 1.3 + a.id.slot as f32 * 1.9).sin() * (0.5 + 1.4 * chop(sc))) * u;
+        let (x, y) = (a.pos.0, a.pos.1);
+        // the owner's boat is the cabin-less one; the work boat has the cabin
+        boat(d, sc, &self.lay, x, y, a.role == Role::Dockhand, a.id.slot as usize + 1, false, bob);
+        if moving {
+            // a wake behind it
+            let way = a.facing;
+            d.rect_mode(self.lay.dx(x) - way * 20.0 * u, self.lay.dy(y) + 1.0 * u, self.lay.dx(x) - way * 4.0 * u, self.lay.dy(y) + 2.2 * u, hex(sc.p.snow), 0.30, Blend::Screen);
+        }
+        true
+    }
+
+    fn story_alive(&self, d: &mut Draw<Frame>, sc: &Scene, state: &Snapshot, t: f32, indoors: bool) {
+        if indoors {
+            return;
+        }
+        let (lay, land) = (&self.lay, &self.land);
+        let b = &self.bind;
+        let gone = (!(state.get(episode::BOAT_A).visible && state.in_base(episode::BOAT_A))) as u8 | (((!state.in_base(episode::BOAT_B)) as u8) << 1);
+        self.gone.set(gone);
+        let fault = state.damage(episode::LANTERN) != Damage::Intact;
+        let test = state.get(episode::LANTERN).open;
+        self.lantern.set(fault as u8 | ((test as u8) << 1));
+        let tone = self.story_tone(sc, Some(3));
+        d.s.behind = Some(3);
+        // the boat while somebody has it in hand, swinging on its rope
+        let s = state.get(episode::BOAT_A);
+        if s.visible && !state.in_base(episode::BOAT_A) && s.damage != Damage::Missing {
+            let (x, y, cabin) = b.boats[2];
+            boat(d, sc, lay, x + LAND + s.pose.dx, y + s.pose.dy, cabin, 2, false, 0.0);
+        }
+        let at = |x: f32, y: f32| (x + LAND, y);
+        let s = state.get(episode::CRATE);
+        if s.visible && !state.in_base(episode::CRATE) && s.damage != Damage::Missing {
+            let c = at(b.crate_at.0, b.crate_at.1);
+            crate::story::draw::crate_box(d, lay, (c.0 + s.pose.dx, c.1 + s.pose.dy), 0.8, s.pose.turn, &tone, 1.0);
+        }
+        let s = state.get(episode::LINE);
+        if s.visible && !state.in_base(episode::LINE) {
+            let c = at(JETTY.1 - 14.0, JETTY.2 - 2.0);
+            episode::coil(d, lay, (c.0 + s.pose.dx, c.1 + s.pose.dy), &tone, 1.0);
+        }
+        let s = state.get(episode::PART);
+        if s.visible && !state.in_base(episode::PART) {
+            let c = at(LIGHT_X + 12.0, 380.0);
+            episode::part(d, lay, (c.0 + s.pose.dx, c.1 + s.pose.dy), s.pose.turn, &tone, 1.0);
+        }
+        d.s.behind = None;
+        if test {
+            // the sweep under test: quick and plainly lit, by day as well
+            let (x, y) = (land.dx(LIGHT_X), lay.dy(LAMP_Y));
+            beam(d, sc, land, (t * 0.7).fract());
+            d.glow(x, y, lay.d(16.0), lay.d(16.0), [255.0, 240.0, 204.0], 0.55, 2, Blend::Screen);
+        }
+    }
+
+    fn ground_state(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors, state: &Snapshot) {
         let (lay, land) = (&self.lay, &self.land);
         let u = lay.u;
         let w = lay.w as usize;
@@ -496,11 +591,14 @@ impl Stage for Shore {
         d.s.stamp(&self.masks[2].1, self.masks[2].0 as i32, 0, |y| (mix(head, low, smooth(hy0, hy1, y as f32)), 1.0));
         bloom.hide(&self.masks[2].1, w, self.masks[2].0);
         self.headland(d, sc, head, &light, level);
-        self.lighthouse(d, sc, head, &light, bloom, out);
+        self.lighthouse(d, sc, head, &light, bloom, out, state.damage(episode::LANTERN) == Damage::Intact);
         self.cottage(d, sc, head, &light, bloom, out);
+        let turning = state.damage(episode::LANTERN) == Damage::Intact;
         if !sc.live {
-            beam(d, sc, land, 0.07);
-        } else {
+            if turning {
+                beam(d, sc, land, 0.07);
+            }
+        } else if turning {
             // the lamp itself never goes dark between sweeps
             let night = smooth(2.0, -4.0, sc.el_eff);
             d.glow(land.dx(LIGHT_X), lay.dy(LAMP_Y), lay.d(22.0), lay.d(22.0), [255.0, 240.0, 204.0], 0.30 * night, 2, Blend::Screen);
@@ -549,8 +647,29 @@ impl Stage for Shore {
         }
         if !sc.live {
             for (k, (x, y, cabin)) in BOATS.into_iter().enumerate() {
-                boat(d, sc, land, x, y, cabin, k, k < sc.machine.containers as usize, 0.0);
+                let away = (k == 2 && !(state.get(episode::BOAT_A).visible && state.in_base(episode::BOAT_A))) || (k == 3 && !state.in_base(episode::BOAT_B));
+                if !away {
+                    boat(d, sc, land, x, y, cabin, k, k < sc.machine.containers as usize, 0.0);
+                }
             }
+        }
+        // what the scene has put on the jetty and the gallery, where it lies at rest
+        let tone = self.story_tone(sc, Some(3));
+        let at = |x: f32, y: f32| (x + LAND, y);
+        let s = state.get(episode::CRATE);
+        if s.visible && state.in_base(episode::CRATE) && s.damage != Damage::Missing {
+            let c = at(self.bind.crate_at.0, self.bind.crate_at.1);
+            crate::story::draw::crate_box(d, lay, (c.0 + s.pose.dx, c.1 + s.pose.dy), 0.8, s.pose.turn, &tone, 1.0);
+        }
+        let s = state.get(episode::LINE);
+        if s.visible && state.in_base(episode::LINE) {
+            let c = at(JETTY.1 - 14.0, JETTY.2 - 2.0);
+            episode::coil(d, lay, (c.0 + s.pose.dx, c.1 + s.pose.dy), &tone, 1.0);
+        }
+        let s = state.get(episode::PART);
+        if s.visible && state.in_base(episode::PART) {
+            let c = at(LIGHT_X + 12.0, 380.0);
+            episode::part(d, lay, (c.0 + s.pose.dx, c.1 + s.pose.dy), s.pose.turn, &tone, 1.0);
         }
 
         // ── the dune ──
@@ -599,10 +718,20 @@ impl Stage for Shore {
         glitter(d, sc, lay, Some(t));
         ships(d, sc, lay, now, t);
         d.s.behind = None;
-        // the light turns once in twelve seconds
-        beam(d, sc, land, (now / 12.0).fract() as f32);
+        // the light turns once in twelve seconds, unless it has failed or is being tried
+        if self.lantern.get() == 0 {
+            beam(d, sc, land, (now / 12.0).fract() as f32);
+        }
         d.s.behind = Some(4);
         for (k, (x, y, cabin)) in BOATS.into_iter().enumerate() {
+            let bit = match k {
+                2 => 1,
+                3 => 2,
+                _ => 0,
+            };
+            if self.gone.get() & bit != 0 {
+                continue;
+            }
             let bob = ((t * (0.7 + 0.08 * k as f32) + k as f32 * 1.7).sin() * (0.5 + 1.4 * chop(sc))) * u;
             boat(d, sc, land, x, y, cabin, k, k < sc.machine.containers as usize, bob);
         }
@@ -701,7 +830,7 @@ impl Shore {
         d.path(&off, 1.4 * u, foam, 0.16 + 0.2 * rough);
     }
 
-    fn lighthouse(&self, d: &mut Draw<Canvas>, sc: &Scene, head: Rgb, light: &Light, bloom: &mut Bloom, out: &mut Anchors) {
+    fn lighthouse(&self, d: &mut Draw<Canvas>, sc: &Scene, head: Rgb, light: &Light, bloom: &mut Bloom, out: &mut Anchors, working: bool) {
         let lay = &self.land;
         let u = lay.u;
         let x = LIGHT_X;
@@ -732,7 +861,7 @@ impl Shore {
             d.rect(px - 0.5 * u, lay.dy(374.5), px + 0.5 * u, lay.dy(382.0), dark, 1.0);
         }
         // the lantern: glass by day, the lamp behind it by night
-        let night = smooth(2.0, -4.0, sc.el_eff);
+        let night = smooth(2.0, -4.0, sc.el_eff) * if working { 1.0 } else { 0.0 };
         let glass = mix(mix(head, sc.sky[5], 0.62), [255.0, 244.0, 214.0], night);
         d.rect(lay.dx(x - 8.0), lay.dy(361.0), lay.dx(x + 8.0), lay.dy(383.0), dark, 1.0);
         d.rect(lay.dx(x - 6.4), lay.dy(363.0), lay.dx(x + 6.4), lay.dy(381.0), glass, 1.0);

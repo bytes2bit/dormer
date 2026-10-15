@@ -7,5 +7,6 @@
 //! things are and what happens when they are disturbed.
 
 pub mod city;
+pub mod coast;
 pub mod rooftops;
 pub mod street;
