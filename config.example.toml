@@ -32,6 +32,39 @@ containers = true            # one blue window for each running Docker container
 fps = 30
 interactive = true          # mouse reactions on the exposed wallpaper; false passes clicks to desktop icons beneath it
 
+[activity]
+birds = 1.0              # how often visitors turn up, as a multiple of the usual (0 to 20)
+meteors = 1.0
+planes = 1.0
+stories = true           # incidents and daily life in the developed views
+
+# Inputs follow reality unless fixed here. Leave a key out and it stays live.
+# Saving from `dormer dev` writes these; so can you.
+[scene]
+# time = "21:30"         # a fixed local time of day (HH:MM)
+# date = "2026-10-15"    # a fixed calendar date (YYYY-MM-DD); the time of day keeps moving
+# cloud = 40             # percent
+# rain = 0               # percent
+# snow = 0
+# fog = 0
+# storm = false
+# rain_in = 4            # hours until rain; 4 means none in sight
+# wind = 10              # km/h
+# wind_from = 270        # degrees
+# temperature = 14       # Celsius
+# humidity = 60          # percent
+
+# Simulation values for what the house shows. Not readings from this machine.
+[scene.simulated_machine]
+# agents = 1             # the lamp
+# containers = 2         # blue windows
+# load = 20              # percent: smoke
+# music = false
+
+# Knobs of a single view, as the dev panel offers them.
+# [views.coast]
+# tide = 0.5
+
 [power]
 hold_file = ""           # while this file exists the wallpaper holds still (e.g. a battery-saver flag)
 

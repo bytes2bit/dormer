@@ -11,6 +11,7 @@ mod pointer;
 mod props;
 mod rng;
 mod scene;
+mod settings;
 mod sky;
 mod sources;
 mod tm;
@@ -145,7 +146,13 @@ pub fn with_overrides(dev: &Map<String, Value>, m: &mut Moment) {
     if let Some(view) = dev.get("view").and_then(|v| v.as_str()).and_then(views::find) {
         m.view = view;
     }
-    m.knobs = m.view.knobs().iter().filter_map(|k| f(k.key).map(|v| (k.key.to_string(), v))).collect();
+    // a knob the panel holds replaces the same knob from the saved profile; the rest stay
+    for k in m.view.knobs() {
+        if let Some(v) = f(k.key) {
+            m.knobs.retain(|(name, _)| name != k.key);
+            m.knobs.push((k.key.to_string(), v));
+        }
+    }
     if let Some(day) = f("day") {
         m.ts += day * 86400.0;
         m.bent = true;
@@ -233,6 +240,10 @@ pub fn real_moment(mode: Option<&str>, overrides: bool) -> Moment {
         view: sources::view(),
         knobs: Vec::new(),
     };
+    // reality, then what was saved, then the panel's draft; the command line comes after all three
+    if let Err(e) = settings::runtime().apply(&mut m) {
+        eprintln!("dormer: saved settings not applied: {}", e);
+    }
     if overrides {
         with_overrides(&sources::overrides(), &mut m);
     }

@@ -234,7 +234,7 @@ impl App {
         layer.set_exclusive_zone(-1);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.set_size(0, 0);
-        if !config().interactive {
+        if !crate::settings::runtime().interactive {
             let region = self.compositor.create_region(&self.qh, ());
             surface.set_input_region(Some(&region));
             region.destroy();
@@ -477,7 +477,7 @@ impl App {
         if !self.screens.iter().any(|s| self.moving(s) && s.pool.is_some()) {
             return if self.screens.iter().any(|s| s.fade.is_some() && self.seen(s)) { 20.0 } else { 0.0 };
         }
-        let fps = config().fps as f64;
+        let fps = crate::settings::runtime().fps as f64;
         if self.world.everywhere() {
             // rain repaints the whole screen every frame, so it gets a film's frame rate; snow falls slower still
             fps.min(if self.world.raining() { 22.0 } else { 18.0 })
@@ -553,7 +553,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for App {
                 let output = registry.bind::<wl_output::WlOutput, _, _>(name, version.min(4), qh, name);
                 app.add_screen(name, output);
             }
-            wl_registry::Event::Global { name, interface, version } if interface == "wl_seat" && config().interactive => {
+            wl_registry::Event::Global { name, interface, version } if interface == "wl_seat" && crate::settings::runtime().interactive => {
                 app.seats.push(Seat::new(name, registry.bind::<wl_seat::WlSeat, _, _>(name, version.min(7), qh, name)));
             }
             wl_registry::Event::GlobalRemove { name } => {
@@ -857,7 +857,7 @@ pub fn run() -> i32 {
         let output = globals.registry().bind::<wl_output::WlOutput, _, _>(name, version.min(4), &qh, name);
         app.add_screen(name, output);
     }
-    if config().interactive {
+    if crate::settings::runtime().interactive {
         let seats: Vec<(u32, u32)> = globals.contents().with_list(|list| list.iter().filter(|g| g.interface == "wl_seat").map(|g| (g.name, g.version)).collect());
         for (name, version) in seats {
             app.seats.push(Seat::new(name, globals.registry().bind::<wl_seat::WlSeat, _, _>(name, version.min(7), &qh, name)));

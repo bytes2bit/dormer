@@ -52,7 +52,7 @@ pub fn view() -> &'static dyn crate::views::View {
     fs::read_to_string(state().join("view"))
         .ok()
         .and_then(|id| crate::views::find(id.trim()))
-        .or_else(|| crate::views::find(&config().view))
+        .or_else(|| crate::views::find(&crate::settings::runtime().view))
         .unwrap_or(crate::views::ALL[0])
 }
 
@@ -69,9 +69,7 @@ pub struct Config {
     pub longitude: Option<f64>,
     pub place_name: String,
     pub seed: u64,
-    pub view: String,
     pub size: String,
-    pub mode: String,
     pub top_dark: String,
     pub top_light: String,
     pub backend: String,
@@ -79,14 +77,14 @@ pub struct Config {
     pub weather: String,
     pub lamp: Vec<String>,
     pub containers: bool,
-    pub fps: u32,
-    pub interactive: bool,
     pub hold_file: String,
     pub terminal: String,
     /// was there a config file to read
     pub found: bool,
 }
 
+/// The process-start settings: where things are and which programs to use. What can change
+/// while dormer runs (view, mode, rates, fixed inputs) is in `settings::runtime()` instead.
 /// The config file laid over the defaults.
 pub fn config() -> &'static Config {
     static CONFIG: OnceLock<Config> = OnceLock::new();
@@ -104,9 +102,7 @@ pub fn config() -> &'static Config {
             longitude: number("place", "longitude"),
             place_name: text("place", "name", ""),
             seed: number("look", "seed").map(|v| v.max(0.0) as u64).unwrap_or(12),
-            view: text("look", "view", "rooftops"),
             size: text("look", "size", "auto"),
-            mode: text("look", "mode", "auto"),
             top_dark: text("look", "top_dark", "#1A2027"),
             top_light: text("look", "top_light", "#ECEFEE"),
             backend: text("wallpaper", "backend", "auto"),
@@ -116,17 +112,11 @@ pub fn config() -> &'static Config {
                 .and_then(|v| v.as_array().map(|a| a.iter().filter_map(|s| s.as_str().map(|s| s.to_string())).collect()))
                 .unwrap_or_else(|| vec!["claude".into(), "codex".into()]),
             containers: get("house", "containers").and_then(|v| v.as_bool()).unwrap_or(true),
-            fps: number("live", "fps").map(|v| v.clamp(5.0, 60.0) as u32).unwrap_or(30),
-            interactive: interactive_setting(&table),
             hold_file: text("power", "hold_file", ""),
             terminal: text("dev", "terminal", ""),
             found,
         }
     })
-}
-
-fn interactive_setting(table: &toml::Table) -> bool {
-    table.get("live").and_then(|t| t.get("interactive")).and_then(|v| v.as_bool()).unwrap_or(true)
 }
 
 /// Run a command and wait a little for it. None when it could not be run or took too long.
@@ -398,9 +388,9 @@ fn audio_playing() -> bool {
 /// dark or light: the config, else the shell's theme, else the desktop's colour scheme.
 pub fn theme_mode() -> String {
     let ok = |m: &str| m == "dark" || m == "light";
-    let cfg = config();
-    if ok(&cfg.mode) {
-        return cfg.mode.clone();
+    let saved = crate::settings::runtime();
+    if ok(&saved.mode) {
+        return saved.mode.clone();
     }
     let mut mode = std::env::var("NOCTALIA_THEME_MODE").unwrap_or_default();
     if !ok(&mode) && which("noctalia").is_some() {
@@ -567,16 +557,5 @@ pub fn set_wallpaper(path: &str) -> Result<(), String> {
         None => Err(format!("{} did not answer", kind)),
         Some((false, out, err)) => Err(format!("{} refused the picture: {}", kind, if err.trim().is_empty() { out.trim() } else { err.trim() })),
         Some(_) => Ok(()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn interactive_defaults_on_and_can_restore_click_through() {
-        assert!(super::interactive_setting(&toml::Table::new()));
-        assert!(!super::interactive_setting(&"[live]\ninteractive = false".parse().unwrap()));
-        assert!(super::interactive_setting(&"[live]\ninteractive = true".parse().unwrap()));
-        assert!(super::interactive_setting(&"[live]\ninteractive = 'invalid'".parse().unwrap()));
     }
 }
