@@ -1,4 +1,4 @@
-# Living scenes, mod packs and usable settings
+# Living scenes, a versatile Rust engine and usable settings
 
 ## Intent and agreed direction
 
@@ -10,8 +10,11 @@ can escalate into exaggerated chain reactions, stubborn characters and comic
 repairs. A pulse drawn over an unchanged object does not satisfy this brief.
 
 The user approved expanding beyond the first cosmetic interaction pass and
-asked for shared interactions, view-specific scenes, a moddable engine, an
+asked for shared interactions, view-specific scenes, a versatile engine, an
 optimized implementation and a redesigned TUI with working config saving.
+The user clarified that engine extensibility means reusable Rust architecture,
+not an external TOML mod-pack system. Rust remains the language for the engine,
+behaviors, effects and cutscenes; TOML remains ordinary user configuration.
 This specification supersedes the October 14 interaction design where the
 two disagree. Its implementation has not started at specification review.
 
@@ -32,16 +35,19 @@ Scope:
 
 ## Chosen architecture and alternatives
 
-Use a bounded scene simulation and a declarative sequence director, with
-reusable actor, prop and effect renderers. Rust supplies capabilities; TOML
-packs assemble them into objects and stories. Built-in incidents use the same
-format and validation path as external packs.
+Use a bounded scene simulation and a typed sequence director, with reusable
+Rust actor, prop, material, effect and behavior components. Views assemble
+objects, routes and stories through Rust structs, enums, traits and builders.
+Adding a new story should use these interfaces without changing Wayland input,
+buffer management or unrelated views. Adding a genuinely new behavior extends
+a focused Rust component rather than a large central view-name switch.
 
-Hardcoding every cutscene would be quicker initially but make modding and
-combinations expensive. A general scripting VM plus unrestricted rigid-body
-physics would provide broader freedom at the cost of scheduling, debugging
-and runtime complexity. The chosen system supports the requested stories
-through explicit state, routes, finite local physics and branching sequences.
+Writing an isolated bespoke simulation for every cutscene would duplicate
+movement, physics, timing, rendering and cleanup. An external scripting or
+configuration language would add an unnecessary authoring layer. The chosen
+Rust architecture shares those mechanisms while allowing typed branching
+sequences and custom Rust behaviors when a story needs them. Finite local
+physics serves these scenes without unrestricted whole-world simulation.
 
 Work has three dependent tracks: the scene runtime and content; the settings
 and TUI that control it; removal/migration and delivery checks. They belong to
@@ -150,7 +156,7 @@ that cleanup or grow the repair crew indefinitely.
 
 ## Sequence director
 
-Definitions express triggers, guards, weighted variants and named stages.
+Typed Rust definitions express triggers, guards, weighted variants and named stages.
 Steps include wait, move along route, face/look, play pose, carry/drop,
 set object state, emit effect/event, reserve/release area, branch, and await
 actor/event. Branches inspect local facts, weather and session memory.
@@ -198,35 +204,41 @@ Unchanged, idle scenes retain their existing resolution, antialiasing, bloom,
 grain and weather density. No periodic cursor polling, network work in actor
 updates, full-screen physics, or busy-waiting sequences.
 
-## Mod format and developer tools
+## Rust extension interfaces and developer tools
 
-External packs live under `$XDG_CONFIG_HOME/dormer/mods/<pack-id>/`. A versioned
-TOML manifest (`schema = 1`) defines object/actor prefabs, vector drawing parts or optional PNG
-sprite frames, route graphs, bindings to view slots, triggers and sequences.
-IDs are pack-namespaced; bindings reference stable view object/socket IDs.
-Built-in content is embedded for installs that copy only the executable.
+Keep responsibilities separate: object state/attachments, material contacts,
+actor movement/poses, event routing, sequence scheduling and drawing. Modules
+use typed IDs and commands rather than stringly typed action dictionaries.
+Prefer enums and compact data for the common path; use traits at actual
+extension boundaries without allocating a boxed object for each particle.
 
-Modders can add props, actors and incidents, change routes/timings/variants,
-and combine supported actions without Rust changes. New engine verbs or new
-procedural terrain renderers require Rust. This boundary must be documented
-with a complete example pack, not described as arbitrary scripting support.
+A view supplies geometry bindings and registers its objects, routes and
+stories. Shared Rust prefabs implement characters, vehicles and common props;
+small typed sequences compose their actions. More unusual interactions can
+implement a Rust behavior interface that reads a bounded context and emits
+validated commands/events. They must obey the same ownership, scheduling,
+damage and resource limits as built-in sequence steps. Avoid a general ECS or
+plugin ABI unless the actual implementation demonstrates a need.
 
-Validate schema version, IDs/references, finite coordinates/durations, valid
-routes, yielding control flow, asset dimensions/bytes and capacity ceilings
-before activation. Errors name the pack, file and offending field. Asset
-paths stay within the pack; decoded images are cached and globally bounded.
-An invalid external pack does not disable built-in scenes or other valid
-packs. Conflicting definitions are diagnosed instead of silently replacing
-objects. Reload packs atomically through existing file-watch facilities;
-failed reloads keep the last valid version. Retiring a pack restores its
-objects and releases its actors/reservations.
+Compilation checks action/parameter types. Scene construction checks stable
+ID references, finite coordinates/durations, route connectivity, yielding
+sequence control flow and population ceilings. Diagnostics name the view,
+story and offending binding. Asset data needed by built-in content is embedded
+or shipped through the existing binary installation contract; image decoding,
+if used, is cached and bounded. No external pack loader, hot-reload scripting,
+mod marketplace or TOML scene language is part of this work.
 
-Provide `dormer mods list`, `dormer mods check PATH` and `dormer mods reload`,
-plus `dormer scenes list --view NAME` and `dormer replay FILE --out DIRECTORY`.
-Replay input accepts timed pointer gestures and named triggers, seed and
-duration. Export deterministic frames at chosen times plus a state/event
-trace, so tests and modders can inspect every repair stage. Scene controls in
-the panel can also trigger any listed incident in the active view.
+Provide `dormer scenes list --view NAME` and
+`dormer replay FILE --out DIRECTORY`. Replay input accepts timed pointer
+gestures and named triggers, seed and duration. This is a test input format,
+not an engine programming language. Export deterministic frames at chosen
+times plus a state/event trace. Scene controls in the panel can also trigger
+any listed incident in the active view.
+
+Document a small complete Rust example that adds a prop, a shared behavior
+and a branching story without touching Wayland or buffer code. Verify reuse
+with the same behavior instantiated in two different views. The engine remains
+part of dormer; extracting a standalone engine crate is not a prerequisite.
 
 ## TUI job and design direction
 
@@ -240,7 +252,7 @@ the shifting slider-only layout with a view selector, grouped controls,
 explicit source modes and a persistent action/status area. Settings include
 View/Appearance, Sky/Weather, Machine preview, Activity/Stories and per-view
 controls. Scene tools list available incidents with trigger, pause/step and
-reset actions, plus mod validation/reload status.
+reset actions, plus active actor/incident status.
 
 Wide terminals can use a category column and control pane; 70x24 uses compact
 tabs and a scrolling list; small terminals retain reachable Save/Discard and
@@ -269,7 +281,7 @@ Interaction requirements:
 
 Saving is an actual durable operation on `config.toml`, not keeping a cache
 producer alive. Persist normal settings (view, mode, FPS, interaction, activity
-rates, per-view settings and enabled packs). The selected view must also
+rates and per-view settings). The selected view must also
 reconcile the existing higher-priority persisted `view` file, so saving a view
 cannot silently leave another view active.
 
@@ -309,7 +321,7 @@ Registry-driven soak and TUI discovery must find five views, including moon.
 
 Maintain native click-through configuration and app input ownership. Existing
 ordinary PNG commands and services continue working. Bump/document settings
-and pack schema behavior where necessary; do not reset personal config as an
+and saved-setting behavior where necessary; do not reset personal config as an
 upgrade mechanism.
 
 ## Verification and completion criteria
@@ -327,9 +339,10 @@ Required evidence:
    activities do not duplicate actors or grow memory across repeated cycles.
 3. Hidden/held scenes freeze and resume; base refresh and resizing preserve
    damage; view/output changes cannot route input to stale objects.
-4. Malformed/conflicting/oversized packs and non-yielding sequences are
-   diagnosed; failed reload retains usable content; the supplied example adds
-   an incident without compiling Rust.
+4. Invalid references/routes, nonfinite parameters and non-yielding or
+   oversized sequences are diagnosed. A documented Rust example adds an
+   incident without modifying core input/render scheduling; the same shared
+   behavior works in two views without duplicated simulation code.
 5. PTY checks for keyboard and fragmented mouse input, stable dragging,
    direct entry, responsive layouts, Save/Discard/Cancel, save failure,
    concurrent edits, comment preservation and persistence after process exit.
@@ -343,7 +356,7 @@ Required evidence:
    bounded memory. Establish that idle director work sleeps and pointer floods
    cannot force full-base painting every frame. Report measured cost honestly.
 
-Delivery includes updated AGENTS/README/config, modding reference and example,
+Delivery includes updated AGENTS/README/config, Rust extension guide and example,
 replay tools, performance/visual evidence and an installed build for the user
 to try after verification. The new implementation replaces the old cosmetic
 effects; it must not be called complete on the strength of one repair demo
