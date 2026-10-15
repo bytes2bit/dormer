@@ -11,6 +11,7 @@
 
 pub mod events;
 pub mod model;
+pub mod physics;
 
 pub use model::*;
 

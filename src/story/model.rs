@@ -127,20 +127,22 @@ pub struct ObjectState {
     pub visible: bool,
     /// a small switch the view's drawing reads: a valve open, a lamp on
     pub open: bool,
+    /// still swinging or settling: the live layer draws it until it is still
+    pub swinging: bool,
     /// counts every change of what the base picture shows
     pub revision: u32,
 }
 
 impl Default for ObjectState {
     fn default() -> Self {
-        ObjectState { pose: Pose::default(), damage: Damage::Intact, attachment: Attachment::Fixed, owner: None, visible: true, open: false, revision: 0 }
+        ObjectState { pose: Pose::default(), damage: Damage::Intact, attachment: Attachment::Fixed, owner: None, visible: true, open: false, swinging: false, revision: 0 }
     }
 }
 
 impl ObjectState {
     /// Is it standing still where the base picture can show it?
     pub fn at_rest(&self) -> bool {
-        matches!(self.attachment, Attachment::Fixed | Attachment::Hanging)
+        matches!(self.attachment, Attachment::Fixed | Attachment::Hanging) && !self.swinging
     }
 }
 
@@ -316,6 +318,7 @@ static INTACT: ObjectState = ObjectState {
     owner: None,
     visible: true,
     open: false,
+    swinging: false,
     revision: 0,
 };
 
