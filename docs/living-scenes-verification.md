@@ -100,3 +100,18 @@ the tank leak; `Snapshot::intact` showing props that are only brought out by a
 story in the still (stills now take the authored snapshot of the view's
 definition); the work-boat crew starting a minute's walk away; and unused
 engine remnants (removed or marked as shared-kit API).
+
+## Installation
+
+On 2026-10-15 the release build (sha256 `4cb7bd78...79ef`, `dormer 0.2.0`) was
+installed to `~/.local/bin/dormer`, the previous binary kept as
+`~/.local/bin/dormer.pre-living-scenes` (sha256 `a25fce36...bb59e`) for
+rollback, and the existing `dormer-live.service` restarted without changing
+its unit file or the personal config. The running process (PID 3731844) has
+the installed file as its executable (matching hash) and was still active
+without restarts twenty seconds later. To roll back:
+
+```sh
+install -m755 ~/.local/bin/dormer.pre-living-scenes ~/.local/bin/dormer
+systemctl --user restart dormer-live.service
+```
