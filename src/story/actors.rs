@@ -506,6 +506,15 @@ impl ActorSystem {
         }
     }
 
+    /// Nobody carries this any more (it was put back by the story).
+    pub fn release_object(&mut self, obj: ObjectId) {
+        for a in self.slots.iter_mut().flatten() {
+            if a.carrying == Some(obj) {
+                a.carrying = None;
+            }
+        }
+    }
+
     pub fn reserved_by(&self, area: AreaId) -> Option<ActorId> {
         self.reservations.iter().find(|r| r.0 == area).map(|r| r.1)
     }

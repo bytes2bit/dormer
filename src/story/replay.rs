@@ -215,6 +215,13 @@ impl Session {
         self.now
     }
 
+    /// Hold the wind at this strength (-1.6 to 1.6) whatever the sky says: for a test.
+    #[cfg(test)]
+    pub fn set_wind(&mut self, wind_x: f32) {
+        self.facts.wind_x = wind_x;
+        self.facts.wind = wind_x.abs() * 16.0;
+    }
+
     pub fn live_everywhere(&self) -> bool {
         self.live.everywhere()
     }
@@ -405,6 +412,14 @@ pub fn run(replay: &Replay, out: &Path, settings: &RuntimeSettings) -> Result<Re
     report.base_repaints = session.base_repaints;
     report.widest_repaint = session.widest_repaint;
     Ok(report)
+}
+
+/// A session on a named view at a named moment, for the tests of each view's stories.
+#[cfg(test)]
+pub fn test_session(view: &str, at: &str, weather: &str, size: (usize, usize)) -> Session {
+    let view = crate::views::find(view).unwrap();
+    let m = crate::replay_moment(view, Some(at), Some(weather), None, &RuntimeSettings::default()).unwrap();
+    Session::new(&m, size, 12).unwrap()
 }
 
 #[cfg(test)]

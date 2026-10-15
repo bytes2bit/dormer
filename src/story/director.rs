@@ -952,12 +952,20 @@ impl Director {
             }
             Step::SetState { obj, change } => {
                 let sid = p.defs.stories[self.runs[ri].story].id;
+                if change == Change::Restore {
+                    // whatever the physics still has of it is forgotten, or it would land again
+                    p.physics.forget(obj);
+                    p.actors.release_object(obj);
+                }
                 apply_change(p.objects, p.defs, obj, change, Some(sid));
             }
             Step::Emit { kind, obj } => {
                 let at = p.defs.object(obj).map_or((0.0, 0.0), |d| d.at);
                 let origin = (self.runs[ri].serial << 20) | self.runs[ri].step as u64;
-                p.bus.emit(Event::new(kind, obj, at, origin));
+                let mut e = Event::new(kind, obj, at, origin);
+                // the story's own announcement is not somebody disturbing it
+                e.tags |= 1 << 7;
+                p.bus.emit(e);
             }
             Step::Reserve { who, area } => {
                 if let Some(a) = self.actor(ri, who) {

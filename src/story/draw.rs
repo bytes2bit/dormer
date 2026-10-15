@@ -32,7 +32,9 @@ impl Tone {
     }
 
     pub fn paint(&self, own: Rgb) -> Rgb {
-        mix(self.near, own, 0.14 + 0.62 * self.tint)
+        // props and people are what the eye is meant to find: they keep their own colour even
+        // after dark, a little dimmed
+        mix(self.near, own, 0.34 + 0.52 * self.tint)
     }
 }
 
@@ -395,6 +397,7 @@ pub fn body<S: Surface>(d: &mut Draw<S>, lay: &Layout, b: &Body, tone: &Tone, al
                 super::model::Material::Stone => tone.paint([150.0, 142.0, 134.0]),
                 _ => tone.paint([130.0, 134.0, 142.0]),
             };
+            let r = r * 1.7;
             poly(d, lay, &[(x + c * r * 1.6, y + s * r * 1.6), (x - s * r, y + c * r), (x - c * r * 1.2, y - s * r * 1.2)], col, alpha);
         }
         BodyKind::Thrown(_) => {}

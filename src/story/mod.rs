@@ -174,6 +174,25 @@ impl StoryWorld {
         &self.objects
     }
 
+    /// Helpers for the tests of each view's stories.
+    #[cfg(test)]
+    pub fn bus_emit_impact(&mut self, obj: ObjectId, origin: u64) {
+        let at = self.definition.object(obj).map_or((0.0, 0.0), |d| d.at);
+        self.bus.emit(events::Event::new(EventKind::Impact, obj, at, origin));
+    }
+
+    #[cfg(test)]
+    pub fn bus_emit_obstruction(&mut self, obj: ObjectId, at: P, origin: u64) {
+        self.bus.emit(events::Event::new(EventKind::Obstruction, obj, at, origin));
+    }
+
+    #[cfg(test)]
+    pub fn place_object(&mut self, obj: ObjectId, at: P) {
+        if let (Some(d), Some(s)) = (self.definition.object(obj), self.objects.get_mut(obj)) {
+            s.pose = Pose { dx: at.0 - d.at.0, dy: at.1 - d.at.1, turn: 0.0 };
+        }
+    }
+
     /// For tests that set a scene up by hand.
     #[cfg(test)]
     pub fn objects_mut(&mut self) -> &mut ObjectStore {
@@ -481,6 +500,10 @@ impl StoryWorld {
                 let _ = self.actors.command(id, cmd, &self.definition.routes, &mut self.objects);
             }
             Command::Object(obj, change) => {
+                if change == Change::Restore {
+                    self.physics.forget(obj);
+                    self.actors.release_object(obj);
+                }
                 director::apply_change(&mut self.objects, &self.definition, obj, change, None);
             }
             Command::Emit(e) => {

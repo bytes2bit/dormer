@@ -22,6 +22,7 @@
 
 pub mod coast;
 pub mod downtown;
+pub mod episodes;
 pub mod globe;
 pub mod kit;
 pub mod moonbase;

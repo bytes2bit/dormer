@@ -13,7 +13,10 @@ use crate::paint::{band, Light};
 use crate::props::{self, Layout};
 use crate::rng::{hash2, PyRng};
 use crate::scene::Scene;
+use crate::story::draw::Tone;
+use crate::story::{Damage, Snapshot};
 use crate::town::{window_state, Kind, Layer, Roof, Town};
+use crate::views::episodes::rooftops as episode;
 use crate::views::{lamp_colours, yours, Anchors, Blink, Breath, Lights, Smoke, Stage, View, Yours};
 
 pub struct Rooftops;
@@ -83,6 +86,12 @@ struct Roofs {
     /// each row of roofs as a mask: first row, then one byte a pixel
     masks: Vec<(usize, Vec<u8>)>,
     depth: Depth,
+    /// what the living scene works with, found in this town
+    bound: Option<episode::RooftopBindings>,
+    /// the window of each knockable pair: (row, index in the row)
+    knock: [Option<usize>; 2],
+    cap_building: Option<usize>,
+    tank_detail: Option<usize>,
 }
 
 impl Roofs {
@@ -113,8 +122,120 @@ impl Roofs {
             }
         }
         let depth = Depth::stack(&masks, w, h);
-        Roofs { town, w, lay, masks, depth }
+        let found = bind(&town, &lay);
+        Roofs { town, w, lay, masks, depth, bound: found.bindings, knock: found.knock, cap_building: found.cap_building, tank_detail: found.tank_detail }
     }
+}
+
+/// Reference pixels of the old town to the design's units.
+fn dz(v: f64) -> f32 {
+    (v / 3.2) as f32
+}
+
+/// Find, in this town, the places the living scene works with: a line to hang a sheet on, a
+/// chimney, a tank, the flats between them. None when this town has no such arrangement.
+fn bind(town: &Town, lay: &Layout) -> Found {
+    let _ = lay;
+    let near = &town.layers[4];
+    let row3 = &town.layers[3];
+    // the flats of the nearest row, left to right
+    let mut flats: Vec<(f64, f64, f64)> = near.buildings.iter().filter_map(|b| b.flat).map(|f| (f[0], f[1], f[2])).filter(|f| f.1 > 200.0 && f.0 < crate::town::REF_W).collect();
+    flats.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    let Some((tank_at, tank)) = town.details.iter().enumerate().find(|(_, d)| d.kind == Kind::Tank && d.layer == 4) else { return Found::default() };
+    let Some(a_at) = flats.iter().position(|f| f.0 <= tank.x && tank.x <= f.1) else { return Found::default() };
+    let Some(c) = flats[..a_at].iter().rev().find(|f| f.1 - f.0 >= 250.0).copied() else { return Found::default() };
+    let Some(b_flat) = flats.get(a_at + 1).copied() else { return Found::default() };
+    let a_flat = flats[a_at];
+    // the chimney nearest the second flat, on a gable, of a house that is not this machine's
+    let mid_b = (b_flat.0 + b_flat.1) / 2.0;
+    let mut best: Option<(usize, f64)> = None;
+    for (bi, b) in row3.buildings.iter().enumerate() {
+        if bi == town.house.0 || b.roof != Roof::Gable || b.chimney.is_none() {
+            continue;
+        }
+        let c = b.chimney.unwrap();
+        let x = (c[0] + c[2]) / 2.0;
+        if x < b_flat.0 || x > crate::town::REF_W - 150.0 {
+            continue;
+        }
+        let dist = (x - mid_b).abs();
+        if best.map_or(true, |(_, d)| dist < d) {
+            best = Some((bi, dist));
+        }
+    }
+    let Some((bi, _)) = best else { return Found::default() };
+    let b = &row3.buildings[bi];
+    let ch = b.chimney.unwrap();
+    let (left, floor_top, right) = (b.rect[0], b.rect[1], b.rect[2]);
+    let apex = b.apex;
+    let slope_y = |x: f64| floor_top - (x - left) * (floor_top - apex.1) / (apex.0 - left);
+    let site_x = ch[0] - 40.0;
+    let ladder_x = (left + 36.0).min(b_flat.1 - 18.0).max(b_flat.0 + 18.0);
+    // roofs to the right of the chimney's: apexes, so that something blown there can be fetched
+    let mut walk = vec![(dz(apex.0), dz(apex.1))];
+    let mut snags = Vec::new();
+    for nb in row3.buildings.iter().skip(bi + 1).take(2) {
+        walk.push((dz(nb.apex.0), dz(nb.apex.1)));
+    }
+    for d in town.details.iter().filter(|d| d.kind == Kind::Aerial && d.layer >= 2) {
+        let top = (dz(d.x), dz(d.y - d.size));
+        if top.0 > dz(left) - 200.0 {
+            snags.push(top);
+        }
+    }
+    // the crane: a mast a sheet can catch on, and the hook that swings
+    snags.push((1600.0 * super::rooftops::CRANE_X, 1000.0 * super::rooftops::CRANE_TOP + 4.0));
+    // two windows of the nearest row to look out of
+    let (ww, wh) = (near.ww, near.wh);
+    let mut picks: [Option<usize>; 2] = [None, None];
+    let mut win = [((0.0f32, 0.0f32), [0.0f32; 4]); 2];
+    for (n, want) in [0.44f64, 0.60].iter().enumerate() {
+        let x_want = want * crate::town::REF_W;
+        let best = near
+            .windows
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| w.y + wh < crate::town::REF_H - 10.0 && w.y > 2900.0 && picks.iter().flatten().all(|k| near.windows[*k].b != w.b))
+            .min_by(|a, b| (a.1.x - x_want).abs().partial_cmp(&(b.1.x - x_want).abs()).unwrap());
+        if let Some((k, w)) = best {
+            picks[n] = Some(k);
+            win[n] = ((dz(w.x + ww / 2.0), dz(w.y + wh)), [dz(w.x), dz(w.y), dz(w.x + ww), dz(w.y + wh)]);
+        }
+    }
+    if picks.iter().any(Option::is_none) {
+        return Found::default();
+    }
+    let elsewhere_flat = town.cat_spots.iter().find(|(l, f)| *l == 2 && f[1] < crate::town::REF_W).map(|(_, f)| f).copied().unwrap_or([1239.0, 1520.0, 2645.0]);
+    let bindings = episode::RooftopBindings {
+        line: ((dz(c.0 + (c.1 - c.0) * 0.18), dz(c.2)), (dz(c.0 + (c.1 - c.0) * 0.82), dz(c.2))),
+        chimney: (dz((ch[0] + ch[2]) / 2.0), dz(ch[1])),
+        chimney_w: dz(ch[2] - ch[0]),
+        gable: [(dz(left), dz(floor_top)), (dz(apex.0), dz(apex.1)), (dz(right), dz(floor_top))],
+        tank: (dz(tank.x), dz(tank.y)),
+        tank_size: dz(tank.size) * 3.2 / 3.2 * 1.0,
+        flats: vec![(dz(c.0), dz(c.1), dz(c.2)), (dz(a_flat.0), dz(a_flat.1), dz(a_flat.2)), (dz(b_flat.0), dz(b_flat.1), dz(b_flat.2))],
+        ladder: ((dz(ladder_x), dz(b_flat.2)), (dz(left + 30.0), dz(floor_top + 8.0))),
+        site: (dz(site_x), dz(slope_y(site_x))),
+        walk,
+        snags,
+        windows: win,
+        pot: (dz(b_flat.1 - 14.0), dz(b_flat.2)),
+        perches: vec![(dz(ch[0] - 6.0), dz(ch[1] - 3.0)), (dz(apex.0 + 40.0), dz(slope_y(apex.0 + 40.0) + 0.0)), (dz(right - 40.0), dz(floor_top - (right - 40.0 - apex.0).abs() * 0.0 - 30.0))],
+        elsewhere: (dz((elsewhere_flat[0] + elsewhere_flat[1]) / 2.0), dz(elsewhere_flat[2])),
+        scale_near: 0.58,
+        scale_far: 0.40,
+    };
+    Found { bindings: Some(bindings), knock: picks, cap_building: Some(bi), tank_detail: Some(tank_at) }
+}
+
+#[derive(Default)]
+struct Found {
+    bindings: Option<episode::RooftopBindings>,
+    knock: [Option<usize>; 2],
+    /// the building (in the second row from the front) whose chimney loses its cap
+    cap_building: Option<usize>,
+    /// the detail that is the leaking tank
+    tank_detail: Option<usize>,
 }
 
 struct Ctx<'a> {
@@ -122,6 +243,8 @@ struct Ctx<'a> {
     city: &'a Town,
     st: &'a Roofs,
     lay: Layout,
+    /// what the living scene has done to the things it can change
+    state: &'a Snapshot<'a>,
 }
 
 impl Stage for Roofs {
@@ -152,8 +275,22 @@ impl Stage for Roofs {
     }
 
     fn ground(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors) {
+        self.ground_state(d, sc, lights, bloom, out, &Snapshot::intact())
+    }
+
+    fn story(&self) -> Option<crate::story::Definition> {
+        self.bound.as_ref().map(episode::define)
+    }
+
+    fn story_tone(&self, sc: &Scene, layer: Option<u8>) -> Tone {
+        // the row it stands in front of: the nearest roofs when nothing hides it
+        let row = layer.map_or(4, |l| (l as usize).saturating_sub(1)).min(4);
+        Tone::new(sc.layers[row], 0.18 + 0.70 * sc.day, sc.sky[5])
+    }
+
+    fn ground_state(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors, state: &Snapshot) {
         let (city, lay) = (&self.town, self.lay);
-        let cx = Ctx { sc, city, st: self, lay };
+        let cx = Ctx { sc, city, st: self, lay, state };
         if sc.kite && !sc.live {
             props::kite(d, sc, lay.cx(city.kite.0), lay.cy(city.kite.1), lay.u, (sc.ts / 420.0) as f32, (sc.ts / 700.0) as f32, (sc.ts / 300.0) as f32);
         }
@@ -198,6 +335,48 @@ impl Stage for Roofs {
 
     fn lively(&self, sc: &Scene, _now: f64) -> bool {
         sc.kite
+    }
+
+    fn story_alive(&self, d: &mut Draw<Frame>, sc: &Scene, state: &Snapshot, t: f32, indoors: bool) {
+        let Some(b) = &self.bound else { return };
+        if indoors {
+            return;
+        }
+        let lay = &self.lay;
+        let tone = self.story_tone(sc, None);
+        let moving = |id: crate::story::ObjectId| {
+            let s = state.get(id);
+            s.visible && s.damage != Damage::Missing && !state.in_base(id)
+        };
+        // the sheet: swinging by one peg, carried, dragged, or loose in the air
+        if moving(episode::SHEET) {
+            let s = state.get(episode::SHEET);
+            let loose = !matches!(s.attachment, crate::story::Attachment::Hanging | crate::story::Attachment::Fixed);
+            let hangs = matches!(s.attachment, crate::story::Attachment::Hanging);
+            let mid = ((b.line.0 .0 + b.line.1 .0) / 2.0 + s.pose.dx, b.line.0 .1 - 11.0 + s.pose.dy);
+            // up among the aerials it is behind the near flats; on the flats it is in front
+            d.s.behind = if mid.1 < b.flats.get(1).map_or(0.0, |f| f.2) - 30.0 { Some(4) } else { None };
+            if hangs && s.damage == Damage::Broken {
+                // caught on an aerial: a flag in the wind
+                episode::sheet(d, lay, b.line, Damage::Broken, s.pose, &tone, sc.wind_x, t, true);
+            } else {
+                episode::sheet(d, lay, b.line, if loose { Damage::Broken } else { Damage::Damaged }, s.pose, &tone, sc.wind_x, t, loose);
+            }
+            d.s.behind = None;
+        }
+        let flat_y = b.flats.get(1).map_or(0.0, |f| f.2);
+        d.s.behind = None;
+        for (id, at, kind) in [(episode::BUCKET, (b.tank.0 - 26.0, flat_y), 0), (episode::PART, (b.tank.0 + 40.0, b.tank.1), 1), (episode::POT, b.pot, 2)] {
+            if moving(id) {
+                let s = state.get(id);
+                let p = (at.0 + s.pose.dx, at.1 + s.pose.dy);
+                match kind {
+                    0 => episode::bucket_prop(d, lay, p, &tone),
+                    1 => episode::valve_wheel_prop(d, lay, p, &tone),
+                    _ => episode::pot_prop(d, lay, p, &tone, s.pose.turn),
+                }
+            }
+        }
     }
 }
 
@@ -275,6 +454,7 @@ fn row_of_roofs(d: &mut Draw<Canvas>, cx: &Ctx, i: usize, lit: &[Option<Rgb>], b
         clock_tower(d, cx, mix(sc.layers[1], sc.layers[2], 0.45), &light, bloom, out);
     }
     furniture(d, cx, layer, i, col, bloom);
+    story_props(d, cx, i, col);
 
     // windows
     let (ww, wh) = (layer.ww as f32 * s, layer.wh as f32 * s);
@@ -284,7 +464,7 @@ fn row_of_roofs(d: &mut Draw<Canvas>, cx: &Ctx, i: usize, lit: &[Option<Rgb>], b
     let frame = shade(col, -0.25);
     // by day every window shows, as a darker pane in the wall; the far rows keep only their lit ones
     let pane_a = [0.0, 0.0, 0.32, 0.46, 0.46][i] * smooth(-6.0, 5.0, sc.el_eff);
-    for (win, state) in layer.windows.iter().zip(lit) {
+    for (wi, (win, state)) in layer.windows.iter().zip(lit).enumerate() {
         if i == 3 && win.b == city.house.0 {
             continue;
         }
@@ -293,6 +473,16 @@ fn row_of_roofs(d: &mut Draw<Canvas>, cx: &Ctx, i: usize, lit: &[Option<Rgb>], b
             continue;
         }
         let coat = &coats[win.b];
+        if i == 4 {
+            for (n, k) in cx.st.knock.iter().enumerate() {
+                if *k == Some(wi) && cx.state.get([episode::WINDOW_A, episode::WINDOW_B][n]).open {
+                    if let Some(b) = &cx.st.bound {
+                        let tone = Tone::new(col, 0.18 + 0.70 * sc.day, sc.sky[5]);
+                        episode::window_open(d, lay, b.windows[n].1, &tone);
+                    }
+                }
+            }
+        }
         if i >= 3 {
             // a sill under it, and on some houses a shutter folded back to each side
             d.rect(x - ww * 0.12, y + wh, x + ww * 1.12, y + wh + (1.0 * u).max(0.8), shade(coat.wall, 0.10), 0.5);
@@ -416,7 +606,7 @@ fn roofs(d: &mut Draw<Canvas>, cx: &Ctx, layer: &Layer, i: usize, col: Rgb, ligh
     let rim_col = mix(col, light.col, 0.62);
     let rim_a = (light.k * (0.62 + 0.11 * i as f32)).min(0.9);
     let near = i >= 3;
-    for (b, coat) in layer.buildings.iter().zip(coats) {
+    for (bi, (b, coat)) in layer.buildings.iter().zip(coats).enumerate() {
         let [l, t, r, floor] = b.rect;
         let (x0, x1, yt) = (lay.cx(l), lay.cx(r), lay.cy(t));
         if x1 < -20.0 || x0 > lay.w + 20.0 {
@@ -501,11 +691,17 @@ fn roofs(d: &mut Draw<Canvas>, cx: &Ctx, layer: &Layer, i: usize, col: Rgb, ligh
         if let Some(c) = b.chimney {
             let (c0, cy0, c1) = (lay.cx(c[0]), lay.cy(c[1]), lay.cx(c[2]));
             d.rect(c0, cy0, c1, yt.min(lay.cy(c[3])), shade(wall, -0.05), 1.0);
+            // the one chimney the living scene can break loses its cap and pots
+            let cap = if i == 3 && Some(bi) == cx.st.cap_building { cx.state.damage(episode::CAP) } else { Damage::Intact };
+            if cap != Damage::Intact {
+                episode::chimney_top(d, &cx.lay, (((c[0] + c[2]) / 2.0 / 3.2) as f32, (c[1] / 3.2) as f32), ((c[2] - c[0]) / 3.2) as f32, cap, wall, eave);
+            } else {
             d.rect(c0 - 0.9 * u, cy0 - 1.3 * u, c1 + 0.9 * u, cy0 + 0.3 * u, eave, 1.0);
             if near {
                 let pot = mix(eave, TILES[0], 0.25 * sc_day(cx));
                 d.rect(c0 + (c1 - c0) * 0.18, cy0 - 4.6 * u, c0 + (c1 - c0) * 0.42, cy0 - 1.2 * u, pot, 1.0);
                 d.rect(c0 + (c1 - c0) * 0.58, cy0 - 3.8 * u, c0 + (c1 - c0) * 0.82, cy0 - 1.2 * u, pot, 1.0);
+            }
             }
         }
     }
@@ -524,7 +720,7 @@ fn furniture(d: &mut Draw<Canvas>, cx: &Ctx, layer: &Layer, i: usize, col: Rgb, 
     let glass_a = 0.92 * smooth(-5.0, 4.0, sc.el_eff);
     let power = (0.30 + 0.70 * sc.dark) * sc.p.bloom;
     let leaf = mix(col, hex(sc.p.seasons[sc.season][1]), 0.25 + 0.45 * sc.day);
-    for det in city.details.iter().filter(|d| d.layer == i) {
+    for (di, det) in city.details.iter().enumerate().filter(|(_, d)| d.layer == i) {
         let (x, y, sz) = (lay.cx(det.x), lay.cy(det.y), det.size as f32 * lay.s);
         if x < -60.0 || x > lay.w + 60.0 {
             continue;
@@ -545,6 +741,12 @@ fn furniture(d: &mut Draw<Canvas>, cx: &Ctx, layer: &Layer, i: usize, col: Rgb, 
                 d.rect(x - sz * 0.48, y - sz * 1.15, x + sz * 0.48, y - sz * 0.36, col, 1.0);
                 d.poly(&[(x - sz * 0.54, y - sz * 1.15), (x, y - sz * 1.42), (x + sz * 0.54, y - sz * 1.15)], slate, 1.0);
                 d.rect(x - sz * 0.48, y - sz * 0.80, x + sz * 0.48, y - sz * 0.72, slate, 1.0);
+                if Some(di) == cx.st.tank_detail {
+                    // the valve wheel; a wet stain below it when it leaks
+                    let tone = Tone::new(col, 0.18 + 0.70 * sc.day, sc.sky[5]);
+                    let size = det.size as f32 / 3.2 * 1.0;
+                    episode::tank_valve(d, &lay, ((det.x / 3.2) as f32, (det.y / 3.2) as f32), size * 3.2, cx.state.get(episode::TANK).open, &tone);
+                }
             }
             Kind::Vent => {
                 d.rect(x - sz * 0.45, y - sz * 0.85, x + sz * 0.45, y + 1.0, col, 1.0);
@@ -767,5 +969,39 @@ fn trees(d: &mut Draw<Canvas>, cx: &Ctx, bloom: &mut Bloom, out: &mut Anchors) {
                 d.dot(bx, by, 2.2 * u, 2.2 * u, mix(col, [232.0, 178.0, 192.0], 0.3 + light), 1.0, Blend::Over);
             }
         }
+    }
+}
+
+/// The things only the living scene puts on the roofs, in the row they stand in.
+fn story_props(d: &mut Draw<Canvas>, cx: &Ctx, i: usize, col: Rgb) {
+    let (sc, lay, st) = (cx.sc, &cx.lay, cx.state);
+    let Some(b) = &cx.st.bound else { return };
+    let tone = Tone::new(col, 0.18 + 0.70 * sc.day, sc.sky[5]);
+    if i == 4 {
+        episode::washing_line(d, lay, b.line, &tone);
+        if st.in_base(episode::SHEET) {
+            episode::sheet(d, lay, b.line, st.damage(episode::SHEET), Default::default(), &tone, sc.wind_x, 0.0, false);
+        }
+        for f in b.flats.iter().take(2) {
+            episode::hatch(d, lay, (f.0 + 8.0, f.2), &tone);
+        }
+        if st.in_base(episode::LADDER) {
+            episode::ladder_prop(d, lay, b.ladder, &tone, 1.0);
+        }
+        let flat_y = b.flats.get(1).map_or(0.0, |f| f.2);
+        for (id, at, kind) in [(episode::BUCKET, (b.tank.0 - 26.0, flat_y), 0), (episode::PART, (b.tank.0 + 40.0, b.tank.1), 1), (episode::POT, b.pot, 2)] {
+            if st.in_base(id) {
+                let s = st.get(id);
+                let p = (at.0 + s.pose.dx, at.1 + s.pose.dy);
+                match kind {
+                    0 => episode::bucket_prop(d, lay, p, &tone),
+                    1 => episode::valve_wheel_prop(d, lay, p, &tone),
+                    _ => episode::pot_prop(d, lay, p, &tone, s.pose.turn),
+                }
+            }
+        }
+    }
+    if i == 3 && st.in_base(episode::SCAFFOLD) {
+        episode::scaffold(d, lay, (b.site.0 - 14.0, b.site.1 + 3.0), &tone, 1.0);
     }
 }

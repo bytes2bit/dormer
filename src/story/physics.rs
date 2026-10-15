@@ -288,6 +288,15 @@ impl Physics {
         self.next_origin
     }
 
+    /// Let go of anything the physics holds for this object: its body in the air, its swing.
+    pub fn forget(&mut self, id: ObjectId) {
+        self.bodies.retain(|b| b.kind != BodyKind::Thrown(id));
+        self.springs.retain(|s| s.id != id);
+        if self.grab.is_some_and(|g| g.id == id) {
+            self.grab = None;
+        }
+    }
+
     /// Does anything here still want frames?
     pub fn active(&self) -> bool {
         self.grab.is_some() || !self.springs.is_empty() || self.jets.iter().any(Option::is_some) || self.bodies.iter().any(|b| !b.asleep)
