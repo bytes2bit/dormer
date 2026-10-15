@@ -36,7 +36,7 @@ use crate::sources::{self, cache_file, config};
 use crate::views::{Anchors, View};
 use crate::interaction::{Interaction, Target, pointer_position};
 use crate::pointer::{Cursor, Seat};
-use crate::{build, real_moment, tm, with_overrides, Moment, State};
+use crate::{build, raw_moment, settle, tm, Moment, State};
 
 /// Layers this one must stay above.
 const WALLPAPERS: [&str; 4] = ["noctalia-wallpaper", "hyprpaper", "swww-daemon", "wallpaper"];
@@ -263,6 +263,26 @@ impl App {
         }
     }
 
+    /// Clicks start or stop reaching the wallpaper without a restart: surfaces are mapped
+    /// again with the right input region, and pointers are bound or let go.
+    fn set_interactive(&mut self, on: bool, globals: &wayland_client::globals::GlobalList) {
+        for s in &mut self.screens {
+            s.interaction.reset();
+        }
+        self.restack();
+        if !on {
+            self.seats.clear();
+            return;
+        }
+        let seats: Vec<(u32, u32)> = globals.contents().with_list(|list| list.iter().filter(|g| g.interface == "wl_seat").map(|g| (g.name, g.version)).collect());
+        for (name, version) in seats {
+            if !self.seats.iter().any(|s| s.id == name) {
+                let seat = globals.registry().bind::<wl_seat::WlSeat, _, _>(name, version.min(7), &self.qh, name);
+                self.seats.push(Seat::new(name, seat));
+            }
+        }
+    }
+
     fn screen(&mut self, id: u32) -> Option<usize> {
         self.screens.iter().position(|s| s.id == id)
     }
@@ -320,12 +340,23 @@ impl App {
         }
         let now = tm::now();
         if self.real.as_ref().map_or(true, |r| now - r.1 > 15.0) {
+            // an explicit mode in the settings wins; otherwise the last still draw's will do
+            // without asking the desktop again
+            let saved = crate::settings::runtime().mode.clone();
             let state = State::load();
-            let mode = if state.mode == "dark" || state.mode == "light" { state.mode } else { sources::theme_mode() };
-            self.real = Some((real_moment(Some(&mode), false), now));
+            let mode = if saved == "dark" || saved == "light" {
+                saved
+            } else if state.mode == "dark" || state.mode == "light" {
+                state.mode
+            } else {
+                sources::theme_mode()
+            };
+            self.real = Some((raw_moment(Some(&mode)), now));
         }
+        // what was read stays raw: a saved fixed value that changes, or goes back to Auto,
+        // shows at the next rebase without waiting for the weather to be read again
         let mut m: Moment = self.real.as_ref().unwrap().0.at(now);
-        with_overrides(&sources::overrides(), &mut m);
+        settle(&mut m, true);
         self.bent = m.bent || m.wx.note == "dev";
         // looking out somewhere else: lay the new view out for every screen, and fade over to it
         let moved = m.view.id() != self.view.id();
@@ -879,7 +910,10 @@ pub fn run() -> i32 {
         let signals = libc::signalfd(-1, &set, libc::SFD_NONBLOCK | libc::SFD_CLOEXEC);
         let watch = libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC);
         let _ = std::fs::create_dir_all(sources::state());
-        for dir in [sources::cache(), sources::state()] {
+        // the settings file's directory too: Save from the panel, or an editor, lands there
+        let config_dir = sources::config_path().parent().map(|d| d.to_path_buf());
+        let _ = config_dir.as_ref().map(std::fs::create_dir_all);
+        for dir in [sources::cache(), sources::state()].into_iter().chain(config_dir) {
             if let Ok(dir) = std::ffi::CString::new(dir.to_string_lossy().as_bytes()) {
                 libc::inotify_add_watch(watch, dir.as_ptr(), libc::IN_CLOSE_WRITE | libc::IN_MOVED_TO | libc::IN_DELETE);
             }
@@ -1003,7 +1037,7 @@ pub fn run() -> i32 {
             // the dev panel moved a slider, `dormer pretend` changed the weather, `dormer view` chose
             // another view, or a draw left new state
             let mut raw = [0u8; 4096];
-            let mut mine = false;
+            let (mut mine, mut config_changed) = (false, false);
             loop {
                 let n = unsafe { libc::read(watch, raw.as_mut_ptr() as *mut libc::c_void, raw.len()) };
                 if n <= 0 {
@@ -1011,6 +1045,23 @@ pub fn run() -> i32 {
                 }
                 let text = String::from_utf8_lossy(&raw[..n as usize]);
                 mine |= ["dev.json", "pretend.json", "state.json", "view"].iter().any(|name| text.contains(name));
+                config_changed |= text.contains("config.toml");
+            }
+            if config_changed {
+                let before = crate::settings::runtime();
+                match crate::settings::reload() {
+                    Ok(true) => {
+                        let after = crate::settings::runtime();
+                        mine = true;
+                        // frame rate and the rest are read as they are used; only input needs rebuilding
+                        if before.interactive != after.interactive {
+                            app.set_interactive(after.interactive, &globals);
+                        }
+                    }
+                    Ok(false) => {}
+                    // a half-typed edit: keep what is in force, and say why
+                    Err(e) => eprintln!("dormer: settings not reloaded, keeping the previous ones: {}", e),
+                }
             }
             if mine {
                 rebase_due = Some(mono);

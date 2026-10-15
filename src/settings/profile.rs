@@ -25,7 +25,11 @@ impl RuntimeSettings {
                 moment.knobs.push((key.to_string(), v.clamp(k.lo, k.hi)));
             }
         }
+        let weather = Channel::ALL.iter().any(|c| !c.is_machine() && self.scene.get(*c).is_fixed());
         crate::with_overrides(&held, moment);
+        if weather {
+            moment.wx.note = "saved settings";
+        }
         Ok(())
     }
 
@@ -140,7 +144,9 @@ mod tests {
             .env("TZ", "America/New_York")
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let said = String::from_utf8_lossy(&out.stdout).to_string();
+        // a child that matched no test would also "succeed"
+        assert!(out.status.success() && said.contains("1 passed"), "{}{}", said, String::from_utf8_lossy(&out.stderr));
     }
 
     #[test]

@@ -108,6 +108,7 @@ pub fn explain(sc: &Scene, view: &dyn crate::views::View, stars: &[crate::sky::S
         let note = match wx.note {
             "pretend" => "  (pretending)",
             "dev" => "  (dev panel)",
+            "saved settings" => "  (held by your saved settings)",
             _ => "",
         };
         let coming = match wx.rain_in {

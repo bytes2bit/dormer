@@ -226,10 +226,10 @@ pub fn with_overrides(dev: &Map<String, Value>, m: &mut Moment) {
     }
 }
 
-/// This moment as the world has it, with any overrides laid on top.
-pub fn real_moment(mode: Option<&str>, overrides: bool) -> Moment {
+/// This moment as the world reports it: no saved profile, no panel draft, no flags.
+pub fn raw_moment(mode: Option<&str>) -> Moment {
     let (wx, place) = sources::read_weather(true);
-    let mut m = Moment {
+    Moment {
         ts: tm::now(),
         wx,
         place,
@@ -239,14 +239,24 @@ pub fn real_moment(mode: Option<&str>, overrides: bool) -> Moment {
         bent: false,
         view: sources::view(),
         knobs: Vec::new(),
-    };
-    // reality, then what was saved, then the panel's draft; the command line comes after all three
-    if let Err(e) = settings::runtime().apply(&mut m) {
+    }
+}
+
+/// Lay the saved profile, then the dev panel's draft, over a raw moment.
+pub fn settle(m: &mut Moment, overrides: bool) {
+    if let Err(e) = settings::runtime().apply(m) {
         eprintln!("dormer: saved settings not applied: {}", e);
     }
     if overrides {
-        with_overrides(&sources::overrides(), &mut m);
+        with_overrides(&sources::overrides(), m);
     }
+}
+
+/// This moment as the world has it, with the saved profile and any overrides laid on top.
+/// The command line comes after all three.
+pub fn real_moment(mode: Option<&str>, overrides: bool) -> Moment {
+    let mut m = raw_moment(mode);
+    settle(&mut m, overrides);
     m
 }
 
