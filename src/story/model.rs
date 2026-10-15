@@ -7,6 +7,10 @@
 
 use std::fmt;
 
+use super::actors::RouteGraph;
+use super::behaviors::{BehaviorSpec, Factory};
+use super::director::StoryDef;
+use super::physics::SurfaceMap;
 use crate::gfx::P;
 
 /// Hard ceilings per output. They are limits, not targets.
@@ -212,6 +216,12 @@ pub struct Definition {
     /// the view's id, for diagnostics
     pub view: &'static str,
     pub objects: Vec<ObjectDef>,
+    pub routes: RouteGraph,
+    pub surfaces: SurfaceMap,
+    pub stories: Vec<StoryDef>,
+    pub behaviors: Vec<BehaviorSpec>,
+    /// behaviors written in Rust for this view alone
+    pub custom: Vec<Factory>,
 }
 
 /// Why a definition was refused, naming the view and the binding at fault.
@@ -261,6 +271,27 @@ impl Definition {
             }
             if o.bounds[2] < o.bounds[0] || o.bounds[3] < o.bounds[1] {
                 return Err(self.error(None, at, "has bounds that end before they begin"));
+            }
+        }
+        self.routes.validate().map_err(|why| self.error(None, "routes", why))?;
+        self.surfaces.validate().map_err(|why| self.error(None, "surfaces", why))?;
+        for (n, story) in self.stories.iter().enumerate() {
+            if self.stories[..n].iter().any(|o| o.id == story.id) {
+                return Err(self.error(Some(story.name), format!("story id {}", story.id.0), "is used by another story"));
+            }
+            story.validate(self, self.view)?;
+        }
+        for (n, b) in self.behaviors.iter().enumerate() {
+            let (places, objects) = b.references();
+            for p in places {
+                if self.routes.node(p).is_none() {
+                    return Err(self.error(None, format!("behavior {}", n + 1), format!("uses place {}, which is not on the view's routes", p.0)));
+                }
+            }
+            for o in objects {
+                if self.object(o).is_none() {
+                    return Err(self.error(None, format!("behavior {}", n + 1), format!("uses object {}, which is not an object of this view", o.0)));
+                }
             }
         }
         Ok(())
@@ -364,6 +395,7 @@ mod tests {
                 ObjectDef::new(1, "hydrant", Material::Metal, (600.0, 880.0), [580.0, 840.0, 620.0, 890.0]).accepting(Accepts::GRAB.or(Accepts::POKE)),
                 ObjectDef::new(2, "sign", Material::Metal, (190.0, 630.0), [140.0, 600.0, 240.0, 660.0]).breaks_at(40.0),
             ],
+            ..Default::default()
         }
     }
 
@@ -386,7 +418,7 @@ mod tests {
         assert_eq!((s.damage, s.revision, s.pose.dy), (Damage::Broken, 7, 40.0));
         assert_eq!(store.get(ObjectId(3)).unwrap(), &ObjectState::default());
         // an object the view no longer has is forgotten, and an unknown ID reads as intact
-        let fewer = Definition { view: "street", objects: vec![moved.objects[0].clone()] };
+        let fewer = Definition { view: "street", objects: vec![moved.objects[0].clone()], ..Default::default() };
         store.rebind(&fewer.objects);
         assert!(store.get(ObjectId(2)).is_none());
         assert_eq!(Snapshot::new(&store).damage(ObjectId(2)), Damage::Intact);
@@ -417,7 +449,7 @@ mod tests {
     fn definition_limits_are_enforced() {
         let limits = Limits::default();
         assert_eq!((limits.incidents, limits.actors, limits.bodies, limits.objects, limits.events, limits.instructions, limits.escalations), (4, 24, 128, 64, 256, 256, 3));
-        let mut d = Definition { view: "city", objects: Vec::new() };
+        let mut d = Definition { view: "city", ..Default::default() };
         for n in 0..64u16 {
             d.objects.push(ObjectDef::new(n, "thing", Material::Wood, (n as f32, 0.0), [0.0, 0.0, 1.0, 1.0]));
         }

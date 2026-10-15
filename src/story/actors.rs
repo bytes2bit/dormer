@@ -230,7 +230,7 @@ impl RouteGraph {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActorSpec {
     pub kind: Kind,
     pub role: Role,
@@ -581,6 +581,13 @@ impl ActorSystem {
                 }
             }
         }
+        // told to go back to the place it last left, from between two places: walk back to it
+        if a.node == goal && a.path.is_empty() {
+            let at = graph.node(a.node).map_or(a.pos, |n| n.at);
+            if (at.0 - a.pos.0).abs() + (at.1 - a.pos.1).abs() > 0.5 {
+                a.path.push(goal);
+            }
+        }
         if a.node == goal && a.path.is_empty() {
             a.state = ActorState::Arrived;
             a.pose = a.held_pose;
@@ -588,7 +595,13 @@ impl ActorSystem {
             return;
         }
         let Some(&next) = a.path.first() else { return };
-        let (Some(to), Some(edge)) = (graph.node(next), graph.edge(a.node, next)) else {
+        // a bird flies straight to where it is going; everyone else keeps to an authored edge
+        let edge_mode = match graph.edge(a.node, next) {
+            Some(e) => Some(e.mode),
+            None if a.kind == Kind::Bird || next == a.node => graph.node(a.node).map(|n| n.mode),
+            None => None,
+        };
+        let (Some(to), Some(edge_mode)) = (graph.node(next), edge_mode) else {
             a.path.clear();
             return;
         };
@@ -597,7 +610,7 @@ impl ActorSystem {
         let dist = (dx * dx + dy * dy).sqrt();
         let mut speed = a.kind.pace() * a.scale.max(0.2);
         let mut pose = ActorPose::Walk;
-        match edge.mode {
+        match edge_mode {
             Mode::Ladder => {
                 speed *= 0.45;
                 pose = ActorPose::Climb;

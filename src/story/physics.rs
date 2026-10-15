@@ -82,6 +82,11 @@ impl Body {
     pub fn is_finite(&self) -> bool {
         self.pos.0.is_finite() && self.pos.1.is_finite() && self.vel.0.is_finite() && self.vel.1.is_finite()
     }
+
+    /// An object of the view, let go at `at` with nothing but its own weight.
+    pub fn new_thrown(id: ObjectId, at: P, material: Material) -> Body {
+        Body::new(BodyKind::Thrown(id), at, (0.0, 20.0), material, 6.0)
+    }
 }
 
 /// A line things land on.
