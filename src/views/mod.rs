@@ -172,6 +172,12 @@ pub trait Stage {
     /// weather; otherwise they are drawn before it.
     fn story_alive(&self, _d: &mut Draw<Frame>, _sc: &Scene, _state: &crate::story::Snapshot, _t: f32, _indoors: bool) {}
 
+    /// Let the view draw one of the scene's actors itself, in its own style (its own vans and
+    /// cabs). True when it has.
+    fn story_actor(&self, _d: &mut Draw<Frame>, _sc: &Scene, _a: &crate::story::actors::Actor, _t: f32) -> bool {
+        false
+    }
+
     /// The light people and vehicles stand in on the given layer.
     fn story_tone(&self, sc: &Scene, _layer: Option<u8>) -> crate::story::draw::Tone {
         crate::story::draw::Tone::new(sc.layers[3], 0.18 + 0.7 * sc.day, sc.sky[5])

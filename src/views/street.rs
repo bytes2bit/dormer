@@ -28,6 +28,9 @@ use crate::paint::{band, Light};
 use crate::props::{self, Layout, DW};
 use crate::rng::hash2;
 use crate::scene::Scene;
+use crate::story::draw::Tone;
+use crate::story::{Damage, Snapshot};
+use crate::views::episodes::street as episode;
 use crate::views::kit::{self, to_px, Block, Cap, Paint, Row, Skin, Use, Win};
 use crate::views::{lamp_colours, yours, Anchors, Breath, Knob, Lights, Smoke, Stage, View, Yours};
 
@@ -1083,6 +1086,12 @@ struct Walkups {
     /// across the way, what stands along the kerb, and our side of the glass
     masks: Vec<(usize, Vec<u8>)>,
     depth: Depth,
+    /// the stretch of street the living scene has shut, while it is: ambient walkers turn back
+    /// at it and cars wait for it (the scene's state reaches the ambient drawing through here)
+    zone: std::cell::Cell<Option<(f32, f32)>>,
+    last_zone: std::cell::Cell<(f32, f32)>,
+    /// the clock time the zone last opened again, so that cars pull away rather than jump
+    released: std::cell::Cell<f64>,
 }
 
 /// A point on one wall of the cross street: `side` 0 the left wall, 1 the right; `f` how far
@@ -1219,6 +1228,54 @@ fn sill_shape(sh: &mut Shaper, lay: &Layout) {
 }
 
 impl Walkups {
+    /// Walkers who reach a shut stretch of pavement turn round at its edge and walk back.
+    fn turned_back(&self, mut walkers: Vec<Walker>) -> Vec<Walker> {
+        let Some((z0, z1)) = self.zone.get() else { return walkers };
+        for w in walkers.iter_mut() {
+            if w.way > 0.0 && w.x > z0 {
+                w.x = 2.0 * z0 - w.x;
+                w.way = -1.0;
+            } else if w.way < 0.0 && w.x < z1 {
+                w.x = 2.0 * z1 - w.x;
+                w.way = 1.0;
+            }
+        }
+        walkers
+    }
+
+    /// Cars that have not yet reached a shut stretch of road wait for it in a queue, and pull
+    /// away together a moment after it opens.
+    fn held_up(&self, mut cars: Vec<Car>, now: f64) -> Vec<Car> {
+        let (z0, z1) = self.zone.get().unwrap_or_else(|| self.last_zone.get());
+        let shut = self.zone.get().is_some();
+        let ease = if shut { 0.0 } else { (1.0 - (now - self.released.get()) / 2.5).clamp(0.0, 1.0) as f32 };
+        if !shut && ease <= 0.0 {
+            return cars;
+        }
+        let gap = 24.0;
+        for way in [1.0f32, -1.0] {
+            // those moving this way that have not yet got to the zone, nearest first
+            let mut idx: Vec<usize> = (0..cars.len())
+                .filter(|&i| {
+                    let c = &cars[i];
+                    let len = c.ride.size().0 * c.big;
+                    c.way == way && c.moving && if way > 0.0 { c.nose - len < z0 } else { c.nose + len > z1 }
+                })
+                .collect();
+            idx.sort_by(|a, b| if way > 0.0 { cars[*b].nose.partial_cmp(&cars[*a].nose) } else { cars[*a].nose.partial_cmp(&cars[*b].nose) }.unwrap());
+            let mut limit = if way > 0.0 { z0 - gap } else { z1 + gap };
+            for i in idx {
+                let len = cars[i].ride.size().0 * cars[i].big;
+                let true_nose = cars[i].nose;
+                let held = if way > 0.0 { true_nose.min(limit) } else { true_nose.max(limit) };
+                cars[i].nose = true_nose + (held - true_nose) * if shut { 1.0 } else { ease };
+                cars[i].moving = (cars[i].nose - true_nose).abs() < 1.0;
+                limit = if way > 0.0 { held - len - 14.0 } else { held + len + 14.0 };
+            }
+        }
+        cars
+    }
+
     fn new(w: usize, h: usize) -> Walkups {
         let lay = Layout::new(w, h, HORIZON);
         let mut sh = Shaper::new();
@@ -1272,7 +1329,7 @@ impl Walkups {
         mid.wins.retain(|v| !hidden(v.x + v.w / 2.0, v.y + v.h / 2.0));
         let masks = vec![far.mask.clone(), mid.mask.clone(), across, kerb, ours];
         let depth = Depth::stack(&masks, w, h);
-        Walkups { lay, far, mid, wins, house_of, masks: masks[2..].to_vec(), depth }
+        Walkups { lay, far, mid, wins, house_of, masks: masks[2..].to_vec(), depth, zone: Default::default(), last_zone: std::cell::Cell::new(episode::ZONE), released: std::cell::Cell::new(f64::NEG_INFINITY) }
     }
 }
 
@@ -1295,6 +1352,86 @@ impl Stage for Walkups {
     }
 
     fn ground(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors) {
+        self.ground_state(d, sc, lights, bloom, out, &Snapshot::intact())
+    }
+
+    fn story(&self) -> Option<crate::story::Definition> {
+        Some(episode::define(&LAMPS))
+    }
+
+    fn story_tone(&self, sc: &Scene, layer: Option<u8>) -> Tone {
+        let row = match layer {
+            Some(l) if l <= 2 => 2,
+            _ => 4,
+        };
+        Tone::new(sc.layers[row], 0.20 + 0.66 * sc.day, sc.sky[5])
+    }
+
+    fn story_actor(&self, d: &mut Draw<Frame>, sc: &Scene, a: &crate::story::actors::Actor, t: f32) -> bool {
+        use crate::story::actors::Kind;
+        let (ride, big, k) = match (a.kind, a.role) {
+            (Kind::Truck, _) => (Ride::Van, 1.12, 5),
+            (Kind::Van, _) => (Ride::Van, 1.04, 2),
+            (Kind::Car, crate::story::actors::Role::Police) => (Ride::Saloon, 1.0, 3),
+            (Kind::Car, _) => (Ride::Saloon, 1.0, 1),
+            _ => return false,
+        };
+        let (len, _) = ride.size();
+        let way = a.facing;
+        let car = Car { nose: a.pos.0 + way * len * big / 2.0, base: a.pos.1, way, ride, k, big, moving: matches!(a.state, crate::story::actors::ActorState::Moving) };
+        vehicle(d, sc, &self.lay, &car);
+        // a beacon on the roof, turning
+        let on = ((t * 4.0).sin() > 0.0) as u8 as f32;
+        let (tx, ty) = (a.pos.0, a.pos.1 - ride.size().1 * big - 3.0);
+        let police = a.role == crate::story::actors::Role::Police;
+        let (r, g, b) = if police { (if on > 0.5 { 120.0 } else { 40.0 }, 70.0, if on > 0.5 { 40.0 } else { 220.0 }) } else { (255.0, 168.0, 30.0 * (1.0 + on)) };
+        d.glow(self.lay.dx(tx), self.lay.dy(ty), self.lay.d(11.0), self.lay.d(8.0), [r, g, b], 0.85 * sc.dark.max(0.3), 2, Blend::Screen);
+        true
+    }
+
+    fn story_alive(&self, d: &mut Draw<Frame>, sc: &Scene, state: &Snapshot, t: f32, indoors: bool) {
+        if indoors {
+            return;
+        }
+        let lay = &self.lay;
+        let tone = self.story_tone(sc, None);
+        // the shut stretch: the ambient walkers and cars on the next frame go by it
+        let shut = state.get(episode::HYDRANT).open || state.in_base(episode::CONE_A) && state.get(episode::CONE_A).visible || state.get(episode::BARRIER).visible;
+        let was = self.zone.get().is_some();
+        if shut {
+            self.zone.set(Some(episode::ZONE));
+            self.last_zone.set(episode::ZONE);
+        } else {
+            self.zone.set(None);
+            if was {
+                self.released.set(t as f64);
+            }
+        }
+        d.s.behind = Some(KERBSIDE);
+        for id in [episode::CONE_A, episode::CONE_B] {
+            let s = state.get(id);
+            if s.visible && !state.in_base(id) {
+                let def_at = if id == episode::CONE_A { (600.0 - 52.0, 874.0) } else { (600.0 + 56.0, 874.0) };
+                crate::story::draw::cone(d, lay, (def_at.0 + s.pose.dx, def_at.1 + s.pose.dy), 1.0, &tone, 1.0);
+            }
+        }
+        for (id, home) in [(episode::PARCEL_1, (500.0, 858.0)), (episode::PARCEL_2, (510.0, 856.0)), (episode::PARCEL_3, (506.0, 862.0))] {
+            let s = state.get(id);
+            if s.visible && !state.in_base(id) {
+                crate::story::draw::parcel(d, lay, (home.0 + s.pose.dx, home.1 + s.pose.dy), 1.0, s.pose.turn, id.0 as u32, &tone, 1.0);
+            }
+        }
+        // the diner's sign, when it is swinging or falling: drawn where the physics has it
+        let s = state.get(episode::SIGN);
+        if s.visible && s.damage != Damage::Missing && !state.in_base(episode::SIGN) {
+            d.s.behind = Some(2);
+            let col = mix(shade(street_col(sc), -0.1), ROSE, 0.5);
+            episode::sign_tilted(d, lay, [190.0, 630.0, 292.0, 656.0], s.damage, col, s.pose);
+        }
+        d.s.behind = None;
+    }
+
+    fn ground_state(&self, d: &mut Draw<Canvas>, sc: &Scene, lights: &Lights, bloom: &mut Bloom, out: &mut Anchors, state: &Snapshot) {
         let lay = &self.lay;
         let u = lay.u;
         let cols = sc.layers;
@@ -1324,7 +1461,17 @@ impl Stage for Walkups {
         if sc.mist > 0.02 {
             band(d.s, lay.dy(MID.0 - 80.0), lay.h * 1.3, 30.0 * u, mix(sc.sky[5], sc.haze, 0.4), 0.30 * sc.mist);
         }
-        self.across(d, sc, &lights.on[n..], bloom, out);
+        self.across(d, sc, &lights.on[n..], bloom, out, state);
+        for (id, rect) in [(episode::WINDOW_A, episode::WINDOWS[0]), (episode::WINDOW_B, episode::WINDOWS[1])] {
+            // somebody has come to the window: the pane is lit, a curtain drawn back each side
+            if state.get(id).open {
+                bar(d, lay, rect, [250.0, 214.0, 150.0], 0.96);
+                let w = (rect[2] - rect[0]) * 0.24;
+                bar(d, lay, [rect[0], rect[1], rect[0] + w, rect[3]], [196.0, 92.0, 82.0], 0.9);
+                bar(d, lay, [rect[2] - w, rect[1], rect[2], rect[3]], [196.0, 92.0, 82.0], 0.9);
+                bloom.light(lay.dx(rect[0]), lay.dy(rect[1]), lay.dx(rect[2]), lay.dy(rect[3]), WARM[1], 0.5 * sc.p.bloom);
+            }
+        }
         if sc.fog > 0.0 {
             band(d.s, lay.dy(300.0), lay.h * 1.3, 70.0 * u, fog, 0.28 * sc.fog);
         }
@@ -1340,7 +1487,7 @@ impl Stage for Walkups {
                 walker(d, sc, lay, &w);
             }
         }
-        self.kerbside(d, sc, bloom, out);
+        self.kerbside(d, sc, bloom, out, state);
         if !sc.live {
             for c in traffic(sc, sc.ts) {
                 vehicle(d, sc, lay, &c);
@@ -1361,12 +1508,12 @@ impl Stage for Walkups {
             props::laundry(d, sc, lay.dx(700.0), lay.dx(800.0), lay.dy(413.0), u, street_col(sc), 0, t * 1.5);
         }
         roof_cat(d, sc, lay, now, t);
-        for w in walkers(sc, now) {
+        for w in self.turned_back(walkers(sc, now)) {
             walker(d, sc, lay, &w);
         }
         d.s.behind = Some(OURS);
         signal(d, sc, lay, now);
-        for c in traffic(sc, now) {
+        for c in self.held_up(traffic(sc, now), t as f64) {
             vehicle(d, sc, lay, &c);
         }
         d.s.behind = None;
@@ -1672,7 +1819,7 @@ impl Walkups {
         }
     }
 
-    fn across(&self, d: &mut Draw<Canvas>, sc: &Scene, on: &[Option<Rgb>], bloom: &mut Bloom, out: &mut Anchors) {
+    fn across(&self, d: &mut Draw<Canvas>, sc: &Scene, on: &[Option<Rgb>], bloom: &mut Bloom, out: &mut Anchors, state: &Snapshot) {
         let lay = &self.lay;
         let u = lay.u;
         let col = street_col(sc);
@@ -1693,7 +1840,7 @@ impl Walkups {
         for i in 0..HOUSES.len() {
             facade(d, sc, lay, i, &light);
         }
-        self.roofs(d, sc, col, &light, bloom, out);
+        self.roofs(d, sc, col, &light, bloom, out, state);
         let power = (0.30 + 0.70 * sc.dark) * sc.p.bloom;
         for (k, ((v, state), i)) in self.wins.iter().zip(on).zip(&self.house_of).enumerate() {
             pane(d, sc, lay, v, k as u32, *state, brick(sc, HOUSES[*i].brick), power, bloom, out);
@@ -1818,7 +1965,7 @@ impl Walkups {
         }
     }
 
-    fn roofs(&self, d: &mut Draw<Canvas>, sc: &Scene, col: Rgb, light: &Light, bloom: &mut Bloom, out: &mut Anchors) {
+    fn roofs(&self, d: &mut Draw<Canvas>, sc: &Scene, col: Rgb, light: &Light, bloom: &mut Bloom, out: &mut Anchors, state: &Snapshot) {
         let lay = &self.lay;
         let u = lay.u;
         let slate = shade(col, -0.12);
@@ -1910,7 +2057,20 @@ impl Walkups {
             ink(d, lay, &[(x, 659.0), (x, 668.0)], 1.6, frame, 1.0);
             ink(d, lay, &[(x - 6.0, 668.0), (x + 6.0, 659.0)], 0.8, frame, 0.8);
         }
-        neon(d, sc, lay, "DINER", DINER_SIGN, 26.0, ROSE, if open(DINER, sc) { 1.0 } else { 0.0 }, bloom);
+        // the sign: on its roof, hanging by one fixing, or not there at all (the live layer draws
+        // it while it moves, and where it lands)
+        let tone = Tone::new(col, 0.20 + 0.66 * sc.day, sc.sky[5]);
+        let sign = state.get(episode::SIGN);
+        if sign.visible && sign.damage == Damage::Intact && state.in_base(episode::SIGN) {
+            neon(d, sc, lay, "DINER", DINER_SIGN, 26.0, ROSE, if open(DINER, sc) { 1.0 } else { 0.0 }, bloom);
+        } else if sign.visible && sign.damage != Damage::Missing && state.in_base(episode::SIGN) {
+            // dead tube, one corner still on the frame
+            let tube = mix(shade(sc.layers[3], -0.1), ROSE, 0.35 + 0.25 * sc.day);
+            episode::sign_tilted(d, lay, [190.0, 630.0, 292.0, 656.0], sign.damage, tube, sign.pose);
+        }
+        if state.in_base(episode::LADDER) {
+            crate::story::draw::ladder(d, lay, (232.0, 868.0), (226.0, 664.0), 1.0, &tone, 1.0);
+        }
     }
 
     /// The neighbour's room: the walls and things in it. The neighbour themselves is drawn by
@@ -2117,7 +2277,7 @@ impl Walkups {
     }
 
     /// Along the far kerb: lamps, trees, the hydrant, the parked cars.
-    fn kerbside(&self, d: &mut Draw<Canvas>, sc: &Scene, bloom: &mut Bloom, out: &mut Anchors) {
+    fn kerbside(&self, d: &mut Draw<Canvas>, sc: &Scene, bloom: &mut Bloom, out: &mut Anchors, state: &Snapshot) {
         let lay = &self.lay;
         let near = sc.layers[4];
         let iron = shade(near, 0.05);
@@ -2144,9 +2304,31 @@ impl Walkups {
         }
         // the hydrant, the post box and the bin
         let red = mix(near, [196.0, 72.0, 60.0], tint + 0.1);
-        bar(d, lay, [HYDRANT - 3.5, 857.0, HYDRANT + 3.5, KERB], red, 1.0);
-        oval(d, lay, HYDRANT, 857.0, 4.2, 3.5, red, 1.0);
-        bar(d, lay, [HYDRANT - 6.5, 862.0, HYDRANT + 6.5, 866.0], shade(red, -0.15), 1.0);
+        episode::hydrant_body(d, lay, state.damage(episode::HYDRANT), red, KERB);
+        {
+            let tone = Tone::new(near, tint, sc.sky[5]);
+            for (id, at) in [(episode::CONE_A, (HYDRANT - 52.0, 874.0)), (episode::CONE_B, (HYDRANT + 56.0, 874.0))] {
+                if state.in_base(id) {
+                    let s = state.get(id);
+                    crate::story::draw::cone(d, lay, (at.0 + s.pose.dx, at.1 + s.pose.dy), 1.0, &tone, 1.0);
+                }
+            }
+            if state.in_base(episode::BARRIER) {
+                crate::story::draw::barrier(d, lay, (HYDRANT, 904.0), 72.0, 1.0, &tone, 1.0);
+            }
+            // a stack of parcels at the kerb: whole, or (when it has gone over) gone from here
+            if state.in_base(episode::STACK) {
+                for (k, (dx, dy)) in [(-6.0f32, 0.0f32), (4.0, -2.0), (0.0, -9.0)].iter().enumerate() {
+                    crate::story::draw::parcel(d, lay, (506.0 + dx, 866.0 + dy - 4.0), 1.0, 0.0, k as u32, &tone, 1.0);
+                }
+            }
+            for (id, home) in [(episode::PARCEL_1, (500.0, 858.0)), (episode::PARCEL_2, (510.0, 856.0)), (episode::PARCEL_3, (506.0, 862.0))] {
+                if state.in_base(id) {
+                    let s = state.get(id);
+                    crate::story::draw::parcel(d, lay, (home.0 + s.pose.dx, home.1 + s.pose.dy), 1.0, s.pose.turn, id.0 as u32, &tone, 1.0);
+                }
+            }
+        }
         let post = mix(near, BLUE, tint);
         bar(d, lay, [882.0, 851.0, 899.0, KERB - 4.0], post, 1.0);
         oval(d, lay, 890.5, 851.0, 8.5, 6.0, post, 1.0);

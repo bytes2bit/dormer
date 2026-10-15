@@ -55,6 +55,9 @@ pub fn scene(d: &mut Draw<crate::gfx::Frame>, lay: &Layout, sc: &crate::scene::S
     order.sort_by(|a, b| a.pos.1.partial_cmp(&b.pos.1).unwrap_or(std::cmp::Ordering::Equal));
     for a in order {
         d.s.behind = a.layer.map(|l| l as usize);
+        if stage.story_actor(d, sc, a, t) {
+            continue;
+        }
         let tone = stage.story_tone(sc, a.layer);
         match a.kind {
             Kind::Person => person(d, lay, a, &tone, t, 1.0),

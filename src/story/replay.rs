@@ -422,6 +422,49 @@ pub fn test_session(view: &str, at: &str, weather: &str, size: (usize, usize)) -
     Session::new(&m, size, 12).unwrap()
 }
 
+/// Helpers shared by the tests of each view's stories.
+#[cfg(test)]
+pub mod scripted {
+    use super::*;
+    use crate::story::model::ObjectId;
+
+    pub fn at_of(s: &Session, id: ObjectId) -> crate::gfx::P {
+        s.story.definition().object(id).unwrap().at
+    }
+
+    pub fn run(s: &mut Session, seconds: f64) {
+        s.advance(seconds, 1.0 / 30.0);
+    }
+
+    /// Touch an object where it is: a press and a release on it.
+    pub fn poke(s: &mut Session, id: ObjectId) {
+        let p = at_of(s, id);
+        s.gesture(Gesture::Press(p));
+        s.gesture(Gesture::Release { at: p, velocity: (0.0, 0.0) });
+    }
+
+    /// No principal incident is left, and nobody holds anything.
+    pub fn quiet(s: &Session) {
+        let defs = s.story.definition();
+        assert_eq!(s.story.director().incidents_running(defs), 0, "{:?}", s.story.director().status(defs));
+        assert_eq!(s.story.actors().reservation_count(), 0);
+        assert!(s.story.physics().bodies.len() < 40);
+    }
+
+    /// Run in steps of a tenth of a second until `done`, or `limit` seconds; returns when.
+    pub fn until(s: &mut Session, limit: f64, mut done: impl FnMut(&Session) -> bool) -> Option<f64> {
+        let mut t = 0.0;
+        while t < limit {
+            if done(s) {
+                return Some(t);
+            }
+            s.advance(0.1, 1.0 / 30.0);
+            t += 0.1;
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
