@@ -116,6 +116,30 @@ enough for every form it can take (that rectangle is what is repainted).
 `docs/engine.md` is the guide, with a compiled example in
 `src/story/example.rs`.
 
+Things that have bitten while authoring scenes (see `views/episodes/*.rs`):
+
+- A scene's geometry is bound from the stage (`CityBindings`, `CoastBindings`,
+  the rooftops `bind`), in design units, so it holds at every screen size. Coast
+  draws its headland in a layout slid by `LAND`: add it to object and route
+  coordinates; `Layout.moved` does not change the design coordinates a story uses.
+- `Change::Place` is absolute design coordinates and stores the offset from the
+  object's authored `at`; `Test::Displaced` means moved more than 6 units. A
+  prop a story brings out is `hidden()` and must be put away (and re-hidden)
+  by every ending, including `cleanup`; the acceptance test checks this.
+- Actors' speed is the kind's pace times the node's `scale`, so a small figure
+  on a distant roof is slow: keep routes short, or spawn the crew near the job.
+  A node's layer is what hides someone there (`behind`): inside a tower or a
+  cliff use the layer of the mask that covers it.
+- `Snapshot::intact()` reads every object as visible. Stills go through
+  `paint::render`, which builds the authored snapshot from `Stage::story()`; use
+  that, not `intact()`, wherever hidden props could otherwise show.
+- An object's `bounds` must cover every form it can take, and anything that
+  changes the base beyond its own shape (a block of lights going dark) needs a
+  scenery object (`city::BLOCK`) whose bounds are the region repainted.
+- `Stage::alive` and `story_alive` run in an unspecified order; flags passed
+  between them (`Cell`) lag by a frame, which is fine for suppressing an ambient
+  train or a beam, not for anything that must agree within a frame.
+
 To add a view, implement `View` and `Stage` in `src/views/`, declare the module,
 and register it in `ALL` (including its array length). Registry-based discovery
 handles view selection, dev-panel entries and soak coverage. Update README
@@ -300,12 +324,26 @@ can be expensive); `town --seed 12` prints geometry fingerprints; `globe --out
 PATH` exports flat Earth geography. `sheet` accepts view knob assignments after
 the view ID. `DORMER_TIME=1` prints still-render stage timings. `DORMER_PROBE=1`
 reports live timings every five seconds **and keeps animation running when
-covered**, so it changes the behavior being measured.
+covered**, so it changes the behavior being measured. `scenes list [--view NAME]`
+prints each view's objects, places and stories; `replay FILE --out DIR` plays
+timed gestures and triggers headlessly (frames plus `trace.json`) and is the
+way to look at a scene in action without touching the desktop.
 
 ## Working-tree context
 
 Always inspect `git status` and the existing diff before editing; preserve
 unrelated work.
+
+Never start a second compositor (not even headless Hyprland) to test the live
+layer: it has probed the real display. Native-compositor behavior is reported as
+"not exercised" rather than guessed.
+
+The installed binary is `~/.local/bin/dormer`, run by the user's
+`dormer-live.service`; the previous build is kept as
+`~/.local/bin/dormer.pre-living-scenes`. Installing means building with
+`--release --locked`, copying with a backup, restarting that one service and
+checking `/proc/PID/exe` against the file's hash; do not regenerate the units or
+touch the personal config.
 
 Verification notes for the living-scene work are in
 `docs/living-scenes-verification.md`, including which checks could not be run
